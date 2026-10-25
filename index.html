@@ -382,6 +382,13 @@ input[type=range]{width:160px;accent-color:var(--accent)}
     <p>If your browser asks to <b>access devices on your local network</b>, choose Allow.</p>
   </details>
 
+  <details id="connDetails">
+    <summary>Connection details</summary>
+    <p>What happened on the last connection attempt. If you're stuck, copy this and send it to whoever is helping you.</p>
+    <pre id="connLog" style="white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,monospace;margin:0 0 10px;color:var(--text);-webkit-user-select:text;user-select:text">No connection attempts yet.</pre>
+    <button class="btn ghost" id="copyLog" style="margin:0;padding:10px">Copy details</button>
+  </details>
+
   <div id="connectedTools" style="display:none">
     <h4>On this TV</h4>
     <div class="row r2">
@@ -479,42 +486,100 @@ function candidateUrls(host){
 function connect(){
   if (!currentIp) { openSheet(); return; }
   disconnect(true);
+  connLog.length = 0; t0.v = performance.now();
+  log('Couch Remote → ' + currentIp + ' · ' + (IS_IOS_OTHER_BROWSER ? 'iPhone (non-Safari browser)' : IS_IOS ? 'iPhone Safari' : 'non-iPhone browser'));
   urls = candidateUrls(currentIp); attempt = 0; triedUnsigned = false;
   $('#certLink').href = `https://${currentIp}:3001/`;
   renderHeader(); renderApps(); renderFavs();
   openSocket();
 }
 
+/* ---------- connection log (shown under "Connection details" in the sheet) ---------- */
+const connLog = [];
+const t0 = { v: 0 };
+function log(line){
+  const s = ((performance.now() - t0.v) / 1000).toFixed(1);
+  connLog.push(`${s}s  ${line}`); if (connLog.length > 40) connLog.shift();
+  const el = $('#connLog'); if (el) el.textContent = connLog.join('\n');
+}
+let pairTimer = null;
+function clearPairTimer(){ clearTimeout(pairTimer); pairTimer = null; }
+const TV_SETTING_TIP = `On the TV, make sure <b>LG Connect Apps</b> is turned on. On most LG TVs it's under <b>Settings → All Settings → Network</b>; on newer ones look under <b>General → Devices</b> (or search Settings for “Connect Apps”).`;
+
 function openSocket(){
   const url = urls[attempt];
   setStatus('wait', 'Connecting…');
-  let opened = false, sock;
-  try { sock = new WebSocket(url); } catch { return socketFailed(); }
+  setupMsg('wait', 'Trying to reach your TV…');
+  log('Opening ' + url);
+  let opened = false, settled = false, sock;
+  try { sock = new WebSocket(url); } catch (e) { log('Browser refused: ' + e.message); return socketFailed('blocked'); }
   ws = sock;
-  const timer = setTimeout(() => { if (!opened) { try{sock.close();}catch{} } }, 6000);
-  sock.onopen = () => { opened = true; clearTimeout(timer); register(); };
+  // Don't trust the browser to report a stuck connection: give up ourselves after 7 seconds.
+  const timer = setTimeout(() => {
+    if (opened || settled || sock !== ws) return;
+    settled = true;
+    log('No answer after 7s (connection hung)');
+    sock.onopen = sock.onclose = sock.onerror = sock.onmessage = null;
+    try { sock.close(); } catch {}
+    socketFailed('timeout');
+  }, 7000);
+  sock.onopen = () => {
+    opened = true; clearTimeout(timer);
+    log('Reached the TV. Sending pairing request');
+    setupMsg('wait', 'Reached your TV. Asking it to show the pairing request…');
+    register();
+    clearPairTimer();
+    pairTimer = setTimeout(noPairingReply, 10000);
+  };
+  sock.onerror = () => log('Connection error');
   sock.onmessage = ev => { if (sock === ws) handle(ev.data); };
-  sock.onclose = () => {
+  sock.onclose = ev => {
     clearTimeout(timer);
-    if (sock !== ws) return;
-    if (!opened) return socketFailed();
+    log(`Connection closed (code ${ev.code}${ev.reason ? ', ' + ev.reason : ''})`);
+    if (sock !== ws || settled) return;
+    settled = true;
+    if (!opened) return socketFailed('closed');
+    clearPairTimer();
+    const wasPaired = paired;
     dropConnection();
-    setStatus('off', 'Disconnected — tap to reconnect');
+    if (wasPaired) { setStatus('off', 'Disconnected — tap to reconnect'); return; }
+    setStatus('off', 'Not connected');
+    openSheet(); $('#connDetails').open = true;
+    setupMsg('bad', `Your phone reached the TV, but the TV hung up before pairing. ${TV_SETTING_TIP} Then unplug the TV for 30 seconds, plug it back in, and tap Connect.`);
   };
 }
+function noPairingReply(){
+  if (paired) return;
+  log('TV accepted the connection but did not answer the pairing request');
+  setStatus('off', 'TV didn’t answer');
+  openSheet(); $('#connDetails').open = true;
+  setupMsg('bad', `Your phone reached the TV, but the TV didn't respond to the pairing request.<ol class="steps">
+    <li>${TV_SETTING_TIP}</li>
+    <li>Unplug the TV from the wall for 30 seconds (this clears a common LG glitch), turn it on, and tap <b>Connect</b> again.</li>
+    <li>Make sure the TV is showing something (home screen or an input), not a screensaver or menu.</li></ol>`);
+}
 function dropConnection(){
+  clearPairTimer();
   paired = false; ws = null; closePointer();
   for (const [,p] of pending) p.reject(new Error('disconnected'));
   pending.clear(); subs.clear(); setKeyboardWanted(false);
 }
 
-function socketFailed(){
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_IOS_OTHER_BROWSER = IS_IOS && /CriOS|FxiOS|EdgiOS|OPiOS/.test(navigator.userAgent);
+function socketFailed(why){
   ws = null;
   if (++attempt < urls.length) return openSocket();
   setStatus('off', 'Couldn’t reach the TV');
   openSheet();
-  $('#certHelp').open = true;
-  setupMsg('bad', `Couldn’t reach the TV at <b>${escapeHtml(currentIp)}</b>. Check that it’s on and on the same Wi-Fi. If this is your first time with this TV, do the certificate step below, then tap Connect again.`);
+  $('#certHelp').open = true; $('#connDetails').open = true;
+  const ip = escapeHtml(currentIp);
+  let tips = `<li>Check the TV is on and on the same Wi-Fi as your phone, and that <b>${ip}</b> is its current IP address.</li>
+    <li>Do the certificate step below (tap the link, accept the warning), then tap <b>Connect</b> again.</li>`;
+  if (IS_IOS) tips += `<li>In iPhone <b>Settings → Privacy &amp; Security → Local Network</b>, turn on ${IS_IOS_OTHER_BROWSER ? 'your browser (e.g. Chrome)' : 'Safari Websites'}.</li>`;
+  if (IS_IOS_OTHER_BROWSER) tips += `<li><b>Try Safari instead of Chrome.</b> Chrome on iPhone often won't let the app use the TV's certificate even after you accept it. Open this page in Safari and do the certificate step there.</li>`;
+  tips += `<li>${TV_SETTING_TIP}</li>`;
+  setupMsg('bad', `Couldn’t connect to the TV at <b>${ip}</b>${why === 'timeout' ? ' (the connection hung)' : ''}.<ol class="steps">${tips}</ol>`);
 }
 
 function disconnect(silent){
@@ -540,13 +605,22 @@ function register(){
 function handle(data){
   let msg; try { msg = JSON.parse(data); } catch { return; }
   if (msg.id === 'register_0') {
+    log('TV replied: ' + msg.type + (msg.error ? ' (' + msg.error + ')' : '') + (msg.payload && msg.payload.pairingType ? ' ' + msg.payload.pairingType : ''));
+    clearPairTimer();
     if (msg.type === 'response' && msg.payload && msg.payload.pairingType === 'PROMPT') {
       setStatus('wait', 'Accept on the TV');
       openSheet();
-      setupMsg('wait', 'Look at your TV and choose <b>Accept</b> with your regular remote.');
+      setupMsg('wait', 'Look at your TV and choose <b>Accept</b> with your regular remote. (It can take a few seconds to appear and goes away after about 30 seconds.)');
+      pairTimer = setTimeout(() => {
+        if (paired) return;
+        log('No Accept within 40s');
+        setupMsg('bad', 'The TV didn’t confirm the pairing. If no request appeared on the TV, unplug it for 30 seconds and try again. If it appeared and timed out, tap <b>Connect</b> and accept a little faster.');
+        setStatus('off', 'Not connected');
+      }, 40000);
       return;
     }
     if (msg.type === 'registered') {
+      log('Paired');
       const t = upsertTv(currentIp);
       const key = msg.payload && msg.payload['client-key'];
       if (key) t.key = key;
@@ -1025,6 +1099,11 @@ $('#connectBtn').addEventListener('click', () => {
   connect();
 });
 $('#ipField').addEventListener('keydown', e => { if (e.key === 'Enter') $('#connectBtn').click(); });
+$('#copyLog').addEventListener('click', async () => {
+  const text = connLog.join('\n') + '\n\n' + navigator.userAgent;
+  try { await navigator.clipboard.writeText(text); toast('Copied'); }
+  catch { const r = document.createRange(); r.selectNodeContents($('#connLog')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast('Selected — tap Copy'); }
+});
 $('#toastBtn').addEventListener('click', () => request('ssap://system.notifications/createToast', { message: '👋 Hi from Couch Remote' }).catch(e=>toast(e.message)));
 $('#screenOffBtn').addEventListener('click', () => request('ssap://com.webos.service.tvpower/power/turnOffScreen', { standbyMode: 'active' }).then(()=>{ toast('Screen off — press any button to wake'); closeSheet(); }).catch(()=>toast('Not supported on this TV')));
 
