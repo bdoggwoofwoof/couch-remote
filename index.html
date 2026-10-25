@@ -691,8 +691,11 @@ function rawSend(obj){ if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj
 function register(){
   const p = JSON.parse(JSON.stringify(PAIRING));
   if (triedUnsigned) {
+    // LG's fallback (unsigned) pairing: carry over the permissions the signed part used to grant,
+    // so things like the installed-app list (READ_INSTALLED_APPS) still work.
+    const extra = p.manifest.signed.permissions;
     delete p.manifest.signed; p.manifest.appVersion = '1.0';
-    p.manifest.permissions.push('CONTROL_INPUT_TEXT','CONTROL_MOUSE_AND_KEYBOARD');
+    for (const perm of extra) if (!p.manifest.permissions.includes(perm)) p.manifest.permissions.push(perm);
   }
   const t = cur();
   if (t && t.key) p['client-key'] = t.key;
@@ -1112,7 +1115,8 @@ function renderPopular(){
     const tile = document.createElement('button'); tile.className = 'tile' + (loaded ? ' missing' : '');
     tile.appendChild(popularBadge(p));
     tile.insertAdjacentHTML('beforeend', `<span>${escapeHtml(p.name)}</span>` + (loaded ? '<span class="sub">Not installed</span>' : ''));
-    bindTile(tile, () => loaded ? openStore(p.name) : notConnected());
+    // No app list from the TV? Still try the service's usual LG app ID.
+    bindTile(tile, () => loaded ? openStore(p.name) : (paired && p.ids.length ? launch({ id: p.ids[0], title: p.name }) : notConnected()));
     el.appendChild(tile);
   }
 }
@@ -1210,7 +1214,19 @@ async function loadAppsAndInputs(){
       saveTvs();
     }
     renderAllApps(); renderFavs(); renderHeader();
-  } catch { if (!(cur() && cur().apps.length)) $('#apps').innerHTML = '<div class="empty">Couldn’t load apps.</div>'; }
+  } catch (e) {
+    log('Couldn’t load the app list: ' + e.message);
+    // Paired before the app asked for the app-list permission? Re-pair once to get it.
+    const t = cur();
+    if (t && t.key && /401|permission/i.test(e.message) && !t.repairedForApps) {
+      t.repairedForApps = true; t.key = ''; saveTvs();
+      log('Re-pairing once to get permission for the app list');
+      toast('One more step: accept the request on the TV');
+      setTimeout(connect, 300);
+      return;
+    }
+    if (!(cur() && cur().apps.length)) $('#apps').innerHTML = '<div class="empty">The TV didn’t share its app list. Popular apps below still work.</div>';
+  }
 
   const inEl = $('#inputs');
   try {
