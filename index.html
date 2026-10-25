@@ -40,9 +40,15 @@
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
   font:16px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
   overscroll-behavior:none;-webkit-user-select:none;user-select:none}
-/* Pin the app to the screen edges: in an iPhone home-screen app, height:100% stops short
-   of the bottom and leaves an empty strip. A fixed body always covers the whole screen. */
-body{position:fixed;inset:0;display:flex;flex-direction:column;
+/* Full-screen layout. iOS 26 home-screen web apps (viewport-fit=cover + black-translucent
+   status bar) get a viewport that is short by the status-bar height (WebKit bug 301108), and
+   position:fixed content stops at that short edge. So the page itself is stretched to the real
+   screen height in standalone mode, and everything (including overlays) lives inside the body. */
+html{display:flex;flex-direction:column}
+@media (display-mode: standalone){
+  html{min-height:min(100lvh, calc(100% + env(safe-area-inset-top)))}
+}
+body{position:relative;flex:1 1 0;min-height:0;height:auto;contain:paint;display:flex;flex-direction:column;
   padding:env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) max(10px, calc(env(safe-area-inset-bottom) - 12px)) max(16px, env(safe-area-inset-left))}
 button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;touch-action:manipulation}
 input,select{font:inherit;-webkit-user-select:text;user-select:text}
@@ -181,7 +187,7 @@ nav button .badge{position:absolute;top:6px;right:calc(50% - 18px);width:8px;hei
 nav button.ping .badge{display:block}
 
 /* keyboard prompt banner */
-.kb-banner{position:fixed;left:16px;right:16px;bottom:calc(env(safe-area-inset-bottom) + 84px);z-index:15;max-width:420px;margin:0 auto;
+.kb-banner{position:absolute;left:16px;right:16px;bottom:calc(env(safe-area-inset-bottom) + 84px);z-index:15;max-width:420px;margin:0 auto;
   background:var(--accent);color:var(--accent-ink);border-radius:16px;padding:14px 16px;display:flex;align-items:center;gap:10px;
   font-weight:650;box-shadow:0 10px 30px var(--shadow);transform:translateY(30px);opacity:0;visibility:hidden;pointer-events:none;
   transition:transform .22s ease,opacity .22s ease,visibility 0s linear .22s}
@@ -190,10 +196,10 @@ nav button.ping .badge{display:block}
 .kb-banner span{flex:1}
 
 /* setup / sheet */
-.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:10}
+.sheet-bg{position:absolute;inset:0;background:rgba(0,0,0,.5);display:none;z-index:10}
 .sheet-bg.open{display:block}
-.sheet{position:fixed;left:0;right:0;bottom:0;z-index:11;background:var(--panel);border-radius:24px 24px 0 0;
-  padding:22px 18px calc(env(safe-area-inset-bottom) + 22px);max-height:90vh;overflow-y:auto;
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:11;background:var(--panel);border-radius:24px 24px 0 0;
+  padding:22px 18px calc(env(safe-area-inset-bottom) + 22px);max-height:90%;overflow-y:auto;
   transform:translateY(105%);transition:transform .25s ease;max-width:520px;margin:0 auto}
 .sheet.open{transform:none}
 .sheet h3{margin:0 0 4px;font-size:20px}
@@ -222,7 +228,7 @@ details p, details li{font-size:13px}
 .setting .seg{min-width:180px}
 input[type=range]{width:160px;accent-color:var(--accent)}
 
-.toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 66px);transform:translateX(-50%) translateY(-12px);
+.toast{position:absolute;left:50%;top:calc(env(safe-area-inset-top) + 66px);transform:translateX(-50%) translateY(-12px);
   background:var(--text);color:var(--bg);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;transition:.2s;z-index:20;
   pointer-events:none;max-width:86vw;text-align:center}
 .toast.show{opacity:1;transform:translateX(-50%)}
