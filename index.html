@@ -988,10 +988,28 @@ function tvIcons(a){
   return out;
 }
 function iconImg(a, ph, p){ if (p && p.logo) return; loadIcon(ph, tvIcons(a), a.title); }
+/* Launch an app. Some TVs (especially ones paired with LG's fallback method) reject the usual
+   command, so try the alternatives in order and log what the TV said for each. */
+const LAUNCH_ROUTES = [
+  id => ['ssap://system.launcher/launch', { id }],
+  id => ['ssap://com.webos.applicationManager/launch', { id }],
+  id => ['ssap://system.launcher/open', { id }],
+];
+let launchRoute = 0;   // remember which one worked
+async function launchApp(id){
+  let lastErr;
+  for (let k = 0; k < LAUNCH_ROUTES.length; k++) {
+    const i = (launchRoute + k) % LAUNCH_ROUTES.length;
+    const [uri, payload] = LAUNCH_ROUTES[i](id);
+    try { const r = await request(uri, payload); launchRoute = i; if (k) log('Launch worked via ' + uri); return r; }
+    catch (e) { lastErr = e; log(`Launch ${id} via ${uri} failed: ${e.message}`); }
+  }
+  throw lastErr || new Error('launch failed');
+}
 function launch(a){
   if (!paired) return notConnected();
   buzz();
-  request('ssap://system.launcher/launch', { id: a.id }).then(()=>toast('Opening ' + a.title)).catch(e=>toast(e.message));
+  launchApp(a.id).then(()=>toast('Opening ' + a.title)).catch(e=>toast('Couldn’t open ' + a.title + ': ' + e.message));
 }
 
 /* The big streaming apps, always shown in this order. Matched against the TV's own
@@ -1031,7 +1049,7 @@ function openStore(name){
   const storeApp = t && t.apps.find(a => /content store|^apps$|^lg store/i.test(a.title.trim()));
   toast(name + ' isn’t installed — search for it in the LG app store');
   const tryIds = storeApp ? [storeApp.id] : ['com.webos.app.discovery', 'com.webos.app.lgstore'];
-  (function next(i){ if (i < tryIds.length) request('ssap://system.launcher/launch', { id: tryIds[i] }).catch(() => next(i + 1)); })(0);
+  (function next(i){ if (i < tryIds.length) launchApp(tryIds[i]).catch(() => next(i + 1)); })(0);
 }
 
 /* Websites open in the TV's built-in web browser. */
