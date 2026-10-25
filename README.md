@@ -30,7 +30,8 @@ The pairing key is saved on the phone, so after that it connects on its own.
 - **Live state:** volume and the app on screen update even when someone uses the physical remote
 - **Multiple TVs:** tap the TV name at the top to switch or add one
 - Cached app list so it's usable the moment it opens
-- Light/dark/auto theme, pointer speed, vibration on/off
+- Sensitivity slider on the Touch tab (separate for Swipe and Pointer; pointer speeds up on quick flicks)
+- Light/dark/auto theme, vibration on/off
 - Screen off; "say hi" test toast
 
 ## Known limits

@@ -119,6 +119,9 @@ main{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-bottom:8px}
 /* touchpad */
 .pad{position:relative;height:min(52vh,430px);border-radius:24px;background:var(--panel);border:1px solid var(--line);
   touch-action:none;overflow:hidden}
+.sens-row{display:flex;align-items:center;gap:12px;margin:0 4px;font-size:14px;color:var(--muted)}
+.sens-row input{flex:1;accent-color:var(--accent)}
+.sens-row b{min-width:20px;text-align:right;color:var(--text);font-variant-numeric:tabular-nums}
 .pad .hint{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:14px;text-align:center;
   pointer-events:none;padding:30px}
 .pad .scroll{position:absolute;right:0;top:0;bottom:0;width:46px;border-left:1px dashed var(--line);
@@ -310,6 +313,11 @@ input[type=range]{width:160px;accent-color:var(--accent)}
       <button data-mode="swipe" class="active">Swipe</button>
       <button data-mode="pointer">Pointer</button>
     </div>
+    <div class="sens-row">
+      <span>Sensitivity</span>
+      <input type="range" id="padSens" min="1" max="10" step="1" aria-label="Sensitivity">
+      <b id="padSensVal"></b>
+    </div>
     <div class="pad swipe" id="pad">
       <div class="hint" id="padHint"></div>
       <div class="scroll" id="scrollStrip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 9 5-5 5 5M7 15l5 5 5-5"/></svg></div>
@@ -426,7 +434,6 @@ input[type=range]{width:160px;accent-color:var(--accent)}
   <div class="setting"><span>Theme</span>
     <div class="seg" id="themeSeg"><button data-theme="auto">Auto</button><button data-theme="light">Light</button><button data-theme="dark">Dark</button></div>
   </div>
-  <div class="setting"><span>Pointer speed</span><input type="range" id="sensRange" min="0.6" max="3.2" step="0.2"></div>
   <div class="setting"><span>Vibrate on press</span>
     <div class="seg" id="hapticSeg"><button data-h="on">On</button><button data-h="off">Off</button></div>
   </div>
@@ -452,7 +459,7 @@ const store = {
   json(k, d){ try { const v = localStorage.getItem('couchRemote.' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
   setJson(k, v){ try { localStorage.setItem('couchRemote.' + k, JSON.stringify(v)); } catch {} }
 };
-const prefs = Object.assign({ theme: 'auto', sens: 1.6, haptics: true, padMode: 'swipe' }, store.json('prefs', {}));
+const prefs = Object.assign({ theme: 'auto', haptics: true, padMode: 'swipe', swipeSens: 6, pointerSens: 6 }, store.json('prefs', {}));
 const savePrefs = () => store.setJson('prefs', prefs);
 const buzz = (ms=8) => { if (!prefs.haptics) return; try { navigator.vibrate && navigator.vibrate(ms); } catch {} };
 let toastTimer;
@@ -882,10 +889,19 @@ document.querySelectorAll('[data-goto]').forEach(el => el.addEventListener('clic
     prefs.padMode = m; savePrefs();
     pad.classList.toggle('swipe', m === 'swipe');
     document.querySelectorAll('#padMode button').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
+    syncSensSlider();
     hint.innerHTML = m === 'swipe'
       ? 'Swipe to move<br>Tap for OK<br><br>Swipe and hold to keep moving'
       : 'Drag to move the pointer<br>Tap to click<br><br>Use the strip on the right to scroll';
   }
+  // One slider; it controls whichever mode is showing.
+  const sensEl = $('#padSens'), sensVal = $('#padSensVal');
+  function syncSensSlider(){ const v = prefs.padMode === 'swipe' ? prefs.swipeSens : prefs.pointerSens; sensEl.value = v; sensVal.textContent = v; }
+  sensEl.addEventListener('input', () => {
+    const v = parseInt(sensEl.value, 10);
+    if (prefs.padMode === 'swipe') prefs.swipeSens = v; else prefs.pointerSens = v;
+    sensVal.textContent = v; savePrefs();
+  });
   document.querySelectorAll('#padMode button').forEach(b => b.addEventListener('click', () => { buzz(5); setMode(b.dataset.mode); }));
   setMode(prefs.padMode);
 
@@ -902,7 +918,11 @@ document.querySelectorAll('[data-goto]').forEach(el => el.addEventListener('clic
 
   let start = null, last = null, moved = 0, accX = 0, accY = 0, raf = 0, scrolling = false, accS = 0;
   let swipeDir = null, swipeRep = null, swipeHold = null, anchor = null;
-  const STEP = 42; // px of travel per arrow press in swipe mode
+  // Swipe: finger travel per arrow press (sensitivity 1 = 59px … 10 = 14px).
+  const swipeStep = () => Math.max(14, 64 - prefs.swipeSens * 5);
+  const swipeRepeatMs = () => Math.max(70, 210 - prefs.swipeSens * 13);
+  // Pointer: base gain (1 = 1.15× … 10 = 4.3×) plus acceleration for fast flicks.
+  const pointerGain = v => (0.8 + prefs.pointerSens * 0.35) * (1 + Math.min(v / 0.6, 2) * 0.6);
 
   function flush(){
     raf = 0;
@@ -924,20 +944,23 @@ document.querySelectorAll('[data-goto]').forEach(el => el.addEventListener('clic
   });
   pad.addEventListener('pointermove', e => {
     if (!last) return;
+    const now = performance.now();
     const dx = e.clientX - last.x, dy = e.clientY - last.y;
+    const speed = Math.hypot(dx, dy) / Math.max(1, now - (last.t || now - 16));   // px per ms
     moved += Math.abs(dx) + Math.abs(dy);
-    last = { x: e.clientX, y: e.clientY };
+    last = { x: e.clientX, y: e.clientY, t: now };
     if (prefs.padMode === 'swipe') {
       const ax = e.clientX - anchor.x, ay = e.clientY - anchor.y;
-      if (Math.max(Math.abs(ax), Math.abs(ay)) >= STEP) {
+      if (Math.max(Math.abs(ax), Math.abs(ay)) >= swipeStep()) {
         const dir = Math.abs(ax) > Math.abs(ay) ? (ax > 0 ? 'RIGHT' : 'LEFT') : (ay > 0 ? 'DOWN' : 'UP');
         fireSwipe(dir); swipeDir = dir; anchor = { x: e.clientX, y: e.clientY };
         stopSwipeRepeat();
-        swipeHold = setTimeout(() => { swipeRep = setInterval(() => fireSwipe(dir), 160); }, 450);
+        swipeHold = setTimeout(() => { swipeRep = setInterval(() => fireSwipe(dir), swipeRepeatMs()); }, 400);
       }
       return;
     }
-    if (scrolling) accS += -dy * 0.6; else { accX += dx * prefs.sens; accY += dy * prefs.sens; }
+    if (scrolling) accS += -dy * (0.4 + prefs.pointerSens * 0.08);
+    else { const g = pointerGain(speed); accX += dx * g; accY += dy * g; }
     if (!raf) raf = requestAnimationFrame(flush);
   });
   const end = e => {
@@ -1020,7 +1043,7 @@ function launch(a){
    installed-app list by name (IDs vary by region and TV year). */
 const POPULAR = [
   { name: 'YouTube',     color: '#FF0000', re: /^youtube$/i,          ids: ['youtube.leanback.v4'], logo: 'youtube', fg: '#FF0000', bg: '#FFFFFF' },
-  { name: 'YouTube TV',  color: '#CC0000', re: /^youtube\s*tv$/i,     ids: ['youtube.leanback.ytv.v1'], logo: 'youtubetv', fg: '#FF0000', bg: '#FFFFFF', scale: 88 },
+  { name: 'YouTube TV',  color: '#CC0000', re: /you\s*tube\s*tv/i,    ids: ['youtube.leanback.ytv.v1'], idRe: /ytv|youtube.*tv|tv.*youtube/i, logo: 'youtubetv', fg: '#FF0000', bg: '#FFFFFF', scale: 88 },
   { name: 'Netflix',     color: '#E50914', re: /^netflix$/i,          ids: ['netflix'], logo: 'netflix', fg: '#E50914', bg: '#000000' },
   { name: 'Disney+',     color: '#0E3D8F', re: /^disney\s*(\+|plus)/i, ids: ['com.disney.disneyplus-prod'], logo: 'disney', fg: '#FFFFFF', bg: '#0E3D8F', scale: 74 },
   { name: 'Hulu',        color: '#1CE783', re: /^hulu$/i,             ids: ['hulu'], logo: 'hulu', fg: '#000000', bg: '#1CE783', scale: 82 },
@@ -1046,7 +1069,11 @@ function popularBadge(p){
   }
   return ph;
 }
-function findPopular(t, p){ return t && (t.apps.find(a => p.ids.includes(a.id)) || t.apps.find(a => p.re.test(a.title.trim()))); }
+function findPopular(t, p){
+  return t && (t.apps.find(a => p.ids.includes(a.id))
+    || (p.idRe && t.apps.find(a => p.idRe.test(a.id)))
+    || t.apps.find(a => p.re.test(a.title.trim())));
+}
 function openStore(name){
   if (!paired) return notConnected();
   const t = cur();
@@ -1202,6 +1229,8 @@ async function loadAppsAndInputs(){
       const lps = r.launchPoints || [];
       log(`TV listed ${lps.length} apps` + (lps[0] ? ': e.g. ' + JSON.stringify(lps.slice(0, 3).map(a => ({ id: a.id, appId: a.appId, launchPointId: a.launchPointId, title: a.title }))) : ''));
       t.apps = lps.filter(a => a.title).map(a => ({ id: a.appId || a.id, title: a.title, icon: a.icon || a.largeIcon || '' }));
+      const yt = t.apps.filter(a => /tube/i.test(a.title + ' ' + a.id));
+      if (yt.length) log('YouTube-like apps on TV: ' + yt.map(a => `${a.title} [${a.id}]`).join(', '));
       if (!t.favs.length) {          // sensible starter favorites
         const want = ['netflix', 'youtube', 'amazon', 'hulu', 'disney', 'plex'];
         t.favs = t.apps.filter(a => want.some(w => a.id.toLowerCase().includes(w))).slice(0, 4).map(a => a.id);
@@ -1426,8 +1455,7 @@ function applyTheme(){
 }
 document.querySelectorAll('#themeSeg button').forEach(b => b.addEventListener('click', () => { prefs.theme = b.dataset.theme; savePrefs(); applyTheme(); }));
 applyTheme();
-const sens = $('#sensRange'); sens.value = prefs.sens;
-sens.addEventListener('input', () => { prefs.sens = parseFloat(sens.value); savePrefs(); });
+
 function applyHaptics(){ document.querySelectorAll('#hapticSeg button').forEach(b => b.classList.toggle('active', (b.dataset.h === 'on') === prefs.haptics)); }
 document.querySelectorAll('#hapticSeg button').forEach(b => b.addEventListener('click', () => { prefs.haptics = b.dataset.h === 'on'; savePrefs(); applyHaptics(); buzz(15); }));
 applyHaptics();
