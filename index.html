@@ -1001,12 +1001,13 @@ async function launchApp(id){
   for (let k = 0; k < LAUNCH_ROUTES.length; k++) {
     const i = (launchRoute + k) % LAUNCH_ROUTES.length;
     const [uri, payload] = LAUNCH_ROUTES[i](id);
-    try { const r = await request(uri, payload); launchRoute = i; if (k) log('Launch worked via ' + uri); return r; }
+    try { const r = await request(uri, payload); launchRoute = i; log(`Launch ${id} via ${uri} → TV said OK ${JSON.stringify(r).slice(0, 160)}`); return r; }
     catch (e) { lastErr = e; log(`Launch ${id} via ${uri} failed: ${e.message}`); }
   }
   throw lastErr || new Error('launch failed');
 }
 function launch(a){
+  log(`Tapped ${a.title} (app id ${a.id})`);
   if (!paired) return notConnected();
   buzz();
   launchApp(a.id).then(()=>toast('Opening ' + a.title)).catch(e=>toast('Couldn’t open ' + a.title + ': ' + e.message));
@@ -1059,6 +1060,7 @@ if (!sites) { sites = [DEFAULT_SITE]; store.setJson('sites', sites); }
 const saveSites = () => store.setJson('sites', sites);
 const siteHost = u => { try { return new URL(u).host.replace(/^www\./, ''); } catch { return u; } };
 function openSite(s){
+  log('Tapped website ' + s.url);
   if (!paired) return notConnected();
   buzz();
   request('ssap://system.launcher/open', { target: s.url }).then(() => toast('Opening ' + s.name + ' on the TV')).catch(e => toast(e.message));
@@ -1193,7 +1195,9 @@ async function loadAppsAndInputs(){
     const r = await request('ssap://com.webos.applicationManager/listLaunchPoints');
     const t = cur();
     if (t) {
-      t.apps = (r.launchPoints || []).filter(a => a.title).map(a => ({ id: a.id, title: a.title, icon: a.icon || a.largeIcon || '' }));
+      const lps = r.launchPoints || [];
+      log(`TV listed ${lps.length} apps` + (lps[0] ? ': e.g. ' + JSON.stringify(lps.slice(0, 3).map(a => ({ id: a.id, appId: a.appId, launchPointId: a.launchPointId, title: a.title }))) : ''));
+      t.apps = lps.filter(a => a.title).map(a => ({ id: a.appId || a.id, title: a.title, icon: a.icon || a.largeIcon || '' }));
       if (!t.favs.length) {          // sensible starter favorites
         const want = ['netflix', 'youtube', 'amazon', 'hulu', 'disney', 'plex'];
         t.favs = t.apps.filter(a => want.some(w => a.id.toLowerCase().includes(w))).slice(0, 4).map(a => a.id);
