@@ -671,7 +671,10 @@ function socketFailed(why){
     <li>Do the certificate step below (tap the link, accept the warning), then tap <b>Connect</b> again.</li>`;
   if (IS_IOS) tips += `<li>In iPhone <b>Settings → Privacy &amp; Security → Local Network</b>, turn on ${IS_IOS_OTHER_BROWSER ? 'your browser (e.g. Chrome)' : 'Safari Websites'}.</li>`;
   if (IS_IOS && IS_STANDALONE) tips += `<li><b>Opened from the home-screen icon?</b> On some iPhones the icon doesn't share Safari's certificate approval. Open the link in a regular Safari tab, do the certificate step there, and connect from that tab. If it works there but not from the icon, just use it from the Safari tab.</li>`;
-  if (IS_IOS_OTHER_BROWSER) tips += `<li><b>Try Safari instead of Chrome.</b> Chrome on iPhone often won't let the app use the TV's certificate even after you accept it. Open this page in Safari and do the certificate step there.</li>`;
+  const iosMajor = (navigator.userAgent.match(/OS (\d+)_/) || [])[1] | 0;
+  const oldIos = IS_IOS && iosMajor && iosMajor < 17;
+  if (IS_IOS && !IS_IOS_OTHER_BROWSER && oldIos) tips += `<li><b>Older iPhone (iOS ${iosMajor})? Use Chrome.</b> Safari on this iOS version won't use the TV's certificate even after you accept it. Install Chrome, open <b>https://${ip}:3001</b> there and tap Advanced → Proceed, then open this remote in Chrome and connect.</li>`;
+  if (IS_IOS_OTHER_BROWSER && !oldIos) tips += `<li><b>Still stuck? Try Safari.</b> Open this page in Safari and do the certificate step there.</li>`;
   tips += `<li>${TV_SETTING_TIP}</li>`;
   setupMsg('bad', `Couldn’t connect to the TV at <b>${ip}</b>${why === 'timeout' ? ' (the connection hung)' : ''}.<ol class="steps">${tips}</ol>`);
 }

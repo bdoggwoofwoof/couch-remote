@@ -37,7 +37,8 @@ The pairing key is saved on the phone, so after that it connects on its own.
 
 - **Can't turn the TV on.** When the TV is fully off its network socket is closed, and browsers can't send Wake‑on‑LAN. Use the physical remote or ThinQ for power‑on.
 - Same Wi‑Fi only.
-- On some iPhones (e.g. iOS 16) the home‑screen icon doesn't share Safari's certificate approval. Do the certificate step from inside the icon: the link opens the TV's address in the app's own window; accept the warning, go back, and it reconnects.
+- **iOS 16 and older:** Safari won't use the TV's certificate for the remote's connection even after you accept it. Use Chrome instead (open `https://<tv-ip>:3001` in Chrome, Advanced → Proceed, then open the remote in Chrome).
+- On some iPhones the home‑screen icon doesn't share Safari's certificate approval. Do the certificate step from inside the icon: the link opens the TV's address in the app's own window; accept the warning, go back, and it reconnects.
 - Very old TVs (pre‑2018 firmware) only listen on the insecure port, which an https page can't reach. Opening the page over plain http (e.g. from a computer on your network) works for those.
 
 ## How it works
