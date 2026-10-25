@@ -401,7 +401,7 @@ input[type=range]{width:160px;accent-color:var(--accent)}
     <ol class="steps">
       <li>Tap <b><a id="certLink" href="#" target="_blank" rel="noopener">Open the TV's address</a></b>.</li>
       <li>You'll see a privacy warning. On iPhone tap <b>Show Details → visit this website</b>. On Android tap <b>Advanced → Proceed</b>.</li>
-      <li>A blank or error page after that is normal. Come back here and tap <b>Connect</b>.</li>
+      <li id="certReturnStep">A blank or error page after that is normal. Come back here and tap <b>Connect</b>.</li>
       <li>Accept the request that pops up on the TV with your physical remote. You only do this once.</li>
     </ol>
     <p>If your browser asks to <b>access devices on your local network</b>, choose Allow.</p>
@@ -1355,6 +1355,21 @@ $('#connectBtn').addEventListener('click', () => {
   connect();
 });
 $('#ipField').addEventListener('keydown', e => { if (e.key === 'Enter') $('#connectBtn').click(); });
+
+/* Certificate step from the home-screen app. On some iPhones (e.g. iOS 16) the home-screen
+   app doesn't share Safari's certificate approvals, so in that mode the TV's address opens
+   inside the app's own window instead of in Safari. The IP is saved first, and when the
+   person comes back the app reconnects by itself. */
+if (IS_STANDALONE) {
+  $('#certLink').removeAttribute('target');
+  $('#certReturnStep').innerHTML = 'A blank or error page after that is normal. Then go back to the remote: tap <b>Done</b> or the back arrow at the top, or swipe the app closed and reopen it. It reconnects by itself.';
+}
+$('#certLink').addEventListener('click', e => {
+  const v = ($('#ipField').value.trim() || currentIp).replace(/^\w+:\/\//,'').replace(/[:/].*$/,'');
+  if (!/^[\w.-]+$/.test(v)) { e.preventDefault(); setupMsg('bad', 'Enter the TV’s IP address first, like 192.168.1.50.'); return; }
+  upsertTv(v); currentIp = v; saveTvs(); store.set('certStepAt', String(Date.now()));
+  e.currentTarget.href = `https://${v}:3001/`;
+});
 $('#copyLog').addEventListener('click', async () => {
   const text = connLog.join('\n') + '\n\n' + navigator.userAgent;
   try { await navigator.clipboard.writeText(text); toast('Copied'); }
