@@ -502,7 +502,7 @@ function candidateUrls(host){
 function connect(){
   if (!currentIp) { openSheet(); return; }
   disconnect(true);
-  connLog.length = 0; t0.v = performance.now();
+  connLog.length = 0; t0.v = performance.now(); iconFailLogged = false;
   log('Couch Remote → ' + currentIp + ' · ' + (IS_IOS_OTHER_BROWSER ? 'iPhone (non-Safari browser)' : IS_IOS ? 'iPhone Safari' : 'non-iPhone browser'));
   urls = candidateUrls(currentIp); attempt = 0; triedUnsigned = false;
   $('#certLink').href = `https://${currentIp}:3001/`;
@@ -938,14 +938,22 @@ document.querySelectorAll('[data-goto]').forEach(el => el.addEventListener('clic
 })();
 
 /* ---------- apps, favorites, inputs, channels ---------- */
+// The TV serves each installed app's official icon. Try the secure port first (an https
+// page can't normally load http images), then the original address; keep the letter if both fail.
+let iconFailLogged = false;
 function iconImg(a, ph){
   const icon = a.icon || a.largeIcon;
-  if (!icon) return;
-  const img = new Image(); img.alt = '';
-  let src = icon;
-  if (location.protocol === 'https:') src = src.replace(/^http:\/\/([^/:]+):3000/, 'https://$1:3001');
+  if (!icon) { if (!iconFailLogged) { iconFailLogged = true; log('No icon URL from TV for ' + a.title); } return; }
+  const tries = [];
+  if (location.protocol === 'https:' && /^http:\/\/[^/:]+:3000/.test(icon)) tries.push(icon.replace(/^http:\/\/([^/:]+):3000/, 'https://$1:3001'));
+  tries.push(icon);
+  const img = new Image(); img.alt = ''; let i = 0;
   img.onload = () => ph.replaceWith(img);
-  img.src = src;
+  img.onerror = () => {
+    if (++i < tries.length) { img.src = tries[i]; return; }
+    if (!iconFailLogged) { iconFailLogged = true; log('Icon failed to load: ' + tries.join(' , ')); }
+  };
+  img.src = tries[0];
 }
 function launch(a){
   if (!paired) return notConnected();
