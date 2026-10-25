@@ -40,8 +40,10 @@
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
   font:16px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
   overscroll-behavior:none;-webkit-user-select:none;user-select:none}
-body{display:flex;flex-direction:column;
-  padding:env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 8px)}
+/* Pin the app to the screen edges: in an iPhone home-screen app, height:100% stops short
+   of the bottom and leaves an empty strip. A fixed body always covers the whole screen. */
+body{position:fixed;inset:0;display:flex;flex-direction:column;
+  padding:env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) max(10px, calc(env(safe-area-inset-bottom) - 12px)) max(16px, env(safe-area-inset-left))}
 button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;touch-action:manipulation}
 input,select{font:inherit;-webkit-user-select:text;user-select:text}
 
@@ -71,7 +73,7 @@ main{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-bottom:8px}
 .r3{grid-template-columns:repeat(3,1fr)} .r4{grid-template-columns:repeat(4,1fr)} .r2{grid-template-columns:1fr 1fr}
 
 /* d-pad */
-.dpad{position:relative;width:min(68vw,256px);aspect-ratio:1;margin:2px auto;border-radius:50%;
+.dpad{position:relative;width:min(68vw,256px,31vh);aspect-ratio:1;margin:2px auto;border-radius:50%;
   background:radial-gradient(circle at 50% 35%,var(--dpad-a),var(--dpad-b) 70%);box-shadow:inset 0 2px 0 rgba(255,255,255,.04),0 10px 30px var(--shadow)}
 .dpad button{position:absolute;display:grid;place-items:center;color:var(--muted)}
 .dpad button svg{width:28px;height:28px}
@@ -138,6 +140,7 @@ h2 small{text-transform:none;letter-spacing:0;font-weight:400}
 .tile.fav-on .star{display:block}
 .tile.running{outline:2px solid var(--accent);outline-offset:-2px}
 .tile .brand{color:#fff;font-size:15px;letter-spacing:-.02em}
+.fav .ph.brand{color:#fff}
 .tile.missing{opacity:.6}
 .tile .sub{font-size:11px;color:var(--muted);margin-top:-5px}
 .tile .rm{position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:var(--bad);color:#fff;
@@ -954,6 +957,7 @@ function launch(a){
    installed-app list by name (IDs vary by region and TV year). */
 const POPULAR = [
   { name: 'YouTube',     color: '#FF0000', re: /^youtube$/i,          ids: ['youtube.leanback.v4'] },
+  { name: 'YouTube TV',  color: '#CC0000', re: /^youtube\s*tv$/i,     ids: ['youtube.leanback.ytv.v1'], mark: 'TV' },
   { name: 'Netflix',     color: '#E50914', re: /^netflix$/i,          ids: ['netflix'] },
   { name: 'Disney+',     color: '#0E3D8F', re: /^disney\s*(\+|plus)/i, ids: ['com.disney.disneyplus-prod'] },
   { name: 'Hulu',        color: '#1CE783', re: /^hulu$/i,             ids: ['hulu'] },
@@ -1006,13 +1010,13 @@ function bindTile(el, onTap, onLong){
   el.addEventListener('click', () => { if (!longPressed) onTap(); });
   el.addEventListener('contextmenu', e => e.preventDefault());
 }
-function appTile(a, label, color){
+function appTile(a, label, color, mark){
   const t = cur();
   const tile = document.createElement('button');
   tile.className = 'tile' + (t && t.favs.includes(a.id) ? ' fav-on' : '') + (a.id === fgAppId ? ' running' : '');
   tile.dataset.id = a.id;
   tile.innerHTML = '<span class="star">★</span>';
-  const ph = document.createElement('div'); ph.className = 'ph' + (color ? ' brand' : ''); ph.textContent = (label || a.title).trim()[0] || '?';
+  const ph = document.createElement('div'); ph.className = 'ph' + (color ? ' brand' : ''); ph.textContent = mark || (label || a.title).trim()[0] || '?';
   if (color) ph.style.background = color;
   tile.appendChild(ph); iconImg(a, ph);
   const s = document.createElement('span'); s.textContent = label || a.title; tile.appendChild(s);
@@ -1025,9 +1029,9 @@ function renderPopular(){
   el.innerHTML = '';
   for (const p of POPULAR) {
     const a = loaded && findPopular(t, p);
-    if (a) { el.appendChild(appTile(a, p.name, p.color)); continue; }
+    if (a) { el.appendChild(appTile(a, p.name, p.color, p.mark)); continue; }
     const tile = document.createElement('button'); tile.className = 'tile' + (loaded ? ' missing' : '');
-    tile.innerHTML = `<div class="ph brand" style="background:${p.color}">${escapeHtml(p.name[0])}</div><span>${escapeHtml(p.name)}</span>` + (loaded ? '<span class="sub">Not installed</span>' : '');
+    tile.innerHTML = `<div class="ph brand" style="background:${p.color}">${escapeHtml(p.mark || p.name[0])}</div><span>${escapeHtml(p.name)}</span>` + (loaded ? '<span class="sub">Not installed</span>' : '');
     bindTile(tile, () => loaded ? openStore(p.name) : notConnected());
     el.appendChild(tile);
   }
@@ -1090,7 +1094,8 @@ function renderFavs(){
     } else {
       const a = t.apps.find(x => x.id === id); if (!a) continue;
       const p = POPULAR.find(p => findPopular(t, p) === a);
-      const ph = document.createElement('div'); ph.className = 'ph'; ph.textContent = a.title.trim()[0] || '?';
+      const ph = document.createElement('div'); ph.className = 'ph' + (p ? ' brand' : ''); ph.textContent = (p && p.mark) || a.title.trim()[0] || '?';
+      if (p) ph.style.background = p.color;
       b.appendChild(ph); iconImg(a, ph);
       const s = document.createElement('span'); s.textContent = p ? p.name : a.title; b.appendChild(s);
       b.addEventListener('click', () => launch(a));

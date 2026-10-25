@@ -22,7 +22,7 @@ The pairing key is saved on the phone, so after that it connects on its own.
 - **Remote:** d‑pad, OK, Back, Home, Exit, quick settings, Info (hold arrows/volume to repeat); volume, mute, channel, play/pause/rewind/fast‑forward; power off
 - **Favorites row** on the main screen (long‑press any app to add or remove it)
 - **Touch pad** with two modes: *Swipe* (swipe = arrow keys, tap = OK, swipe and hold to keep moving) and *Pointer* (mouse cursor, tap to click, scroll strip)
-- **Apps & inputs:** a Popular row (YouTube, Netflix, Disney+, Hulu, Paramount+, Prime Video, Max, Apple TV, Peacock; ones you don't have open the LG app store), every installed app, HDMI inputs, and a searchable channel list on antenna/cable TVs; the running app is highlighted
+- **Apps & inputs:** a Popular row (YouTube, YouTube TV, Netflix, Disney+, Hulu, Paramount+, Prime Video, Max, Apple TV, Peacock; ones you don't have open the LG app store), every installed app, HDMI inputs, and a searchable channel list on antenna/cable TVs; the running app is highlighted
 - **Websites:** buttons that open a site in the TV's web browser (Storage Access is preset; add or remove your own)
 - **Typing:** letters go to TV search boxes as you type; mic button for voice search where the browser supports it; number pad
 - **"TV is asking for text"** prompt pops up when a search box on the TV is selected
