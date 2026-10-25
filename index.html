@@ -494,6 +494,69 @@ function connect(){
   openSocket();
 }
 
+/* ---------- TvSocket: WebSocket opened from a sandboxed frame ----------
+   Newer LG firmware closes any connection whose Origin is a website ("invalid origin", 1008)
+   but accepts Origin: null (what local files and sandboxed frames send). A hidden
+   <iframe sandbox="allow-scripts"> has an opaque origin, so sockets opened inside it carry
+   Origin: null. This class looks like a WebSocket to the rest of the app and relays
+   everything to that frame with postMessage. */
+const relay = (() => {
+  const frame = document.createElement('iframe');
+  frame.setAttribute('sandbox', 'allow-scripts');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden';
+  frame.srcdoc = `<!doctype html><script>
+    var socks = {};
+    function up(m){ parent.postMessage(Object.assign({ cr: 1 }, m), '*'); }
+    addEventListener('message', function (e) {
+      var m = e.data; if (!m || !m.cr) return;
+      if (m.op === 'open') {
+        var s;
+        try { s = new WebSocket(m.url); }
+        catch (err) { up({ id: m.id, ev: 'close', code: 0, reason: String(err && err.message || err) }); return; }
+        socks[m.id] = s;
+        s.onopen = function () { up({ id: m.id, ev: 'open' }); };
+        s.onerror = function () { up({ id: m.id, ev: 'error' }); };
+        s.onmessage = function (ev) { up({ id: m.id, ev: 'message', data: ev.data }); };
+        s.onclose = function (ev) { delete socks[m.id]; up({ id: m.id, ev: 'close', code: ev.code, reason: ev.reason }); };
+      } else if (m.op === 'send') {
+        var t = socks[m.id]; if (t && t.readyState === 1) t.send(m.data);
+      } else if (m.op === 'close') {
+        var c = socks[m.id]; if (c) { try { c.close(); } catch (e2) {} }
+      }
+    });
+    up({ ev: 'ready' });
+  <\/script>`;
+  let ready = false; const queue = []; const socks = new Map();
+  window.addEventListener('message', e => {
+    if (e.source !== frame.contentWindow) return;
+    const m = e.data; if (!m || !m.cr) return;
+    if (m.ev === 'ready') { ready = true; queue.splice(0).forEach(x => frame.contentWindow.postMessage(x, '*')); return; }
+    const s = socks.get(m.id); if (s) s._event(m);
+  });
+  document.body.appendChild(frame);
+  return {
+    post(m){ m.cr = 1; if (ready) frame.contentWindow.postMessage(m, '*'); else queue.push(m); },
+    add(s){ socks.set(s.id, s); }, remove(id){ socks.delete(id); }
+  };
+})();
+let tvSocketId = 0;
+class TvSocket {
+  constructor(url){
+    this.url = url; this.readyState = 0; this.id = ++tvSocketId;
+    this.onopen = this.onclose = this.onerror = this.onmessage = null;
+    relay.add(this); relay.post({ op: 'open', id: this.id, url });
+  }
+  send(data){ if (this.readyState === 1) relay.post({ op: 'send', id: this.id, data }); }
+  close(){ if (this.readyState >= 2) return; this.readyState = 2; relay.post({ op: 'close', id: this.id }); }
+  _event(m){
+    if (m.ev === 'open') { this.readyState = 1; this.onopen && this.onopen({}); }
+    else if (m.ev === 'message') { this.onmessage && this.onmessage({ data: m.data }); }
+    else if (m.ev === 'error') { this.onerror && this.onerror({}); }
+    else if (m.ev === 'close') { this.readyState = 3; relay.remove(this.id); this.onclose && this.onclose({ code: m.code, reason: m.reason || '' }); }
+  }
+}
+
 /* ---------- connection log (shown under "Connection details" in the sheet) ---------- */
 const connLog = [];
 const t0 = { v: 0 };
@@ -512,7 +575,7 @@ function openSocket(){
   setupMsg('wait', 'Trying to reach your TV…');
   log('Opening ' + url);
   let opened = false, settled = false, sock;
-  try { sock = new WebSocket(url); } catch (e) { log('Browser refused: ' + e.message); return socketFailed('blocked'); }
+  try { sock = new TvSocket(url); } catch (e) { log('Browser refused: ' + e.message); return socketFailed('blocked'); }
   ws = sock;
   // Don't trust the browser to report a stuck connection: give up ourselves after 7 seconds.
   const timer = setTimeout(() => {
@@ -545,6 +608,10 @@ function openSocket(){
     if (wasPaired) { setStatus('off', 'Disconnected — tap to reconnect'); return; }
     setStatus('off', 'Not connected');
     openSheet(); $('#connDetails').open = true;
+    if (/origin/i.test(ev.reason || '')) {
+      setupMsg('bad', 'Your TV refused the connection because it came from a website (“invalid origin”). This version should avoid that, so try closing the app completely and opening it again. If it keeps happening, copy the connection details below and send them along.');
+      return;
+    }
     setupMsg('bad', `Your phone reached the TV, but the TV hung up before pairing. ${TV_SETTING_TIP} Then unplug the TV for 30 seconds, plug it back in, and tap Connect.`);
   };
 }
@@ -698,7 +765,7 @@ function openPointer(){
     let path = r.socketPath;
     if (!path) return reject(new Error('no socket'));
     if (location.protocol === 'https:' && path.startsWith('ws://')) path = path.replace(/^ws:\/\/([^/:]+):3000/, 'wss://$1:3001');
-    const s = new WebSocket(path);
+    const s = new TvSocket(path);
     s.onopen = () => { pws = s; resolve(s); };
     s.onerror = () => reject(new Error('pointer socket failed'));
     s.onclose = () => { if (pws === s) { pws = null; pointerReady = null; } };
