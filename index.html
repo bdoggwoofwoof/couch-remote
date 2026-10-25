@@ -137,6 +137,15 @@ h2 small{text-transform:none;letter-spacing:0;font-weight:400}
 .tile .star{position:absolute;top:6px;right:8px;font-size:13px;color:var(--accent);display:none}
 .tile.fav-on .star{display:block}
 .tile.running{outline:2px solid var(--accent);outline-offset:-2px}
+.tile .brand{color:#fff;font-size:15px;letter-spacing:-.02em}
+.tile.missing{opacity:.6}
+.tile .sub{font-size:11px;color:var(--muted);margin-top:-5px}
+.tile .rm{position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:var(--bad);color:#fff;
+  font-size:16px;line-height:24px;display:none}
+.editing .tile .rm{display:block}
+.tile.add-tile .ph{background:none;border:1.5px dashed var(--line);color:var(--muted)}
+.ph svg{width:24px;height:24px}
+.h2-btn{font-size:13px;color:var(--accent);text-transform:none;letter-spacing:0;font-weight:600;padding:2px 4px}
 .chip-row{display:flex;flex-wrap:wrap;gap:8px}
 .chip{background:var(--key);border-radius:999px;padding:10px 14px;font-size:14px;box-shadow:0 1px 2px var(--shadow)}
 .chip:active{background:var(--key-hi)}
@@ -306,9 +315,13 @@ input[type=range]{width:160px;accent-color:var(--accent)}
 
   <!-- APPS & INPUTS -->
   <section class="view" id="v-apps">
+    <h2>Popular <small>Long-press to favorite</small></h2>
+    <div class="grid" id="popular"></div>
+    <h2>Websites <button class="h2-btn" id="editSites">Edit</button></h2>
+    <div class="grid" id="sites"></div>
     <h2>Inputs</h2>
     <div class="chip-row" id="inputs"><div class="empty">Connect to see inputs.</div></div>
-    <h2>Apps <small>Long-press to favorite</small></h2>
+    <h2>All apps</h2>
     <div class="grid" id="apps"><div class="empty">Connect to see apps.</div></div>
     <div id="chanWrap" style="display:none;flex-direction:column;gap:14px">
       <h2>Channels</h2>
@@ -490,7 +503,7 @@ function connect(){
   log('Couch Remote → ' + currentIp + ' · ' + (IS_IOS_OTHER_BROWSER ? 'iPhone (non-Safari browser)' : IS_IOS ? 'iPhone Safari' : 'non-iPhone browser'));
   urls = candidateUrls(currentIp); attempt = 0; triedUnsigned = false;
   $('#certLink').href = `https://${currentIp}:3001/`;
-  renderHeader(); renderApps(); renderFavs();
+  renderHeader(); renderAllApps(); renderFavs();
   openSocket();
 }
 
@@ -936,47 +949,155 @@ function launch(a){
   buzz();
   request('ssap://system.launcher/launch', { id: a.id }).then(()=>toast('Opening ' + a.title)).catch(e=>toast(e.message));
 }
+
+/* The big streaming apps, always shown in this order. Matched against the TV's own
+   installed-app list by name (IDs vary by region and TV year). */
+const POPULAR = [
+  { name: 'YouTube',     color: '#FF0000', re: /^youtube$/i,          ids: ['youtube.leanback.v4'] },
+  { name: 'Netflix',     color: '#E50914', re: /^netflix$/i,          ids: ['netflix'] },
+  { name: 'Disney+',     color: '#0E3D8F', re: /^disney\s*(\+|plus)/i, ids: ['com.disney.disneyplus-prod'] },
+  { name: 'Hulu',        color: '#1CE783', re: /^hulu$/i,             ids: ['hulu'] },
+  { name: 'Paramount+',  color: '#0064FF', re: /^paramount/i,         ids: [] },
+  { name: 'Prime Video', color: '#00A8E1', re: /prime video|^amazon/i, ids: ['amazon'] },
+  { name: 'Max',         color: '#002BE7', re: /^(hbo\s*)?max$|^hbo/i, ids: [] },
+  { name: 'Apple TV',    color: '#1d1d1f', re: /^apple tv/i,          ids: ['com.apple.appletv'] },
+  { name: 'Peacock',     color: '#1d1d1f', re: /^peacock/i,          ids: [] },
+];
+function findPopular(t, p){ return t && (t.apps.find(a => p.ids.includes(a.id)) || t.apps.find(a => p.re.test(a.title.trim()))); }
+function openStore(name){
+  if (!paired) return notConnected();
+  const t = cur();
+  const storeApp = t && t.apps.find(a => /content store|^apps$|^lg store/i.test(a.title.trim()));
+  toast(name + ' isn’t installed — search for it in the LG app store');
+  const tryIds = storeApp ? [storeApp.id] : ['com.webos.app.discovery', 'com.webos.app.lgstore'];
+  (function next(i){ if (i < tryIds.length) request('ssap://system.launcher/launch', { id: tryIds[i] }).catch(() => next(i + 1)); })(0);
+}
+
+/* Websites open in the TV's built-in web browser. */
+const DEFAULT_SITE = { name: 'Storage Access', url: 'https://storageaccess.net/#home' };
+let sites = store.json('sites', null);
+if (!sites) { sites = [DEFAULT_SITE]; store.setJson('sites', sites); }
+const saveSites = () => store.setJson('sites', sites);
+const siteHost = u => { try { return new URL(u).host.replace(/^www\./, ''); } catch { return u; } };
+function openSite(s){
+  if (!paired) return notConnected();
+  buzz();
+  request('ssap://system.launcher/open', { target: s.url }).then(() => toast('Opening ' + s.name + ' on the TV')).catch(e => toast(e.message));
+}
+const GLOBE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>';
+
+function favLabel(id){
+  if (id.startsWith('web:')) { const s = sites.find(x => 'web:' + x.url === id); return s ? s.name : 'website'; }
+  const a = cur() && cur().apps.find(x => x.id === id); return a ? a.title : '';
+}
 function toggleFav(id){
   const t = cur(); if (!t) return;
   const i = t.favs.indexOf(id);
   if (i >= 0) t.favs.splice(i, 1); else t.favs.push(id);
   saveTvs(); buzz(20);
-  const a = t.apps.find(x => x.id === id);
-  toast(i >= 0 ? 'Removed from favorites' : 'Added ' + (a ? a.title : '') + ' to favorites');
-  renderApps(); renderFavs();
+  toast(i >= 0 ? 'Removed from favorites' : 'Added ' + favLabel(id) + ' to favorites');
+  renderAllApps(); renderFavs();
 }
+// Tap runs onTap; press and hold runs onLong.
+function bindTile(el, onTap, onLong){
+  let timer, longPressed = false;
+  el.addEventListener('pointerdown', () => { longPressed = false; if (onLong) timer = setTimeout(() => { longPressed = true; onLong(); }, 550); });
+  ['pointerup','pointerleave','pointercancel'].forEach(ev => el.addEventListener(ev, () => clearTimeout(timer)));
+  el.addEventListener('click', () => { if (!longPressed) onTap(); });
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+function appTile(a, label, color){
+  const t = cur();
+  const tile = document.createElement('button');
+  tile.className = 'tile' + (t && t.favs.includes(a.id) ? ' fav-on' : '') + (a.id === fgAppId ? ' running' : '');
+  tile.dataset.id = a.id;
+  tile.innerHTML = '<span class="star">★</span>';
+  const ph = document.createElement('div'); ph.className = 'ph' + (color ? ' brand' : ''); ph.textContent = (label || a.title).trim()[0] || '?';
+  if (color) ph.style.background = color;
+  tile.appendChild(ph); iconImg(a, ph);
+  const s = document.createElement('span'); s.textContent = label || a.title; tile.appendChild(s);
+  bindTile(tile, () => launch(a), () => toggleFav(a.id));
+  return tile;
+}
+function renderPopular(){
+  const t = cur(), el = $('#popular');
+  const loaded = !!(t && t.apps.length);
+  el.innerHTML = '';
+  for (const p of POPULAR) {
+    const a = loaded && findPopular(t, p);
+    if (a) { el.appendChild(appTile(a, p.name, p.color)); continue; }
+    const tile = document.createElement('button'); tile.className = 'tile' + (loaded ? ' missing' : '');
+    tile.innerHTML = `<div class="ph brand" style="background:${p.color}">${escapeHtml(p.name[0])}</div><span>${escapeHtml(p.name)}</span>` + (loaded ? '<span class="sub">Not installed</span>' : '');
+    bindTile(tile, () => loaded ? openStore(p.name) : notConnected());
+    el.appendChild(tile);
+  }
+}
+let editingSites = false;
+function renderSites(){
+  const t = cur(), el = $('#sites');
+  el.classList.toggle('editing', editingSites);
+  $('#editSites').textContent = editingSites ? 'Done' : 'Edit';
+  el.innerHTML = '';
+  sites.forEach((site, idx) => {
+    const id = 'web:' + site.url;
+    const tile = document.createElement('button'); tile.className = 'tile' + (t && t.favs.includes(id) ? ' fav-on' : '');
+    tile.innerHTML = `<span class="star">★</span><span class="rm" role="button" aria-label="Remove">×</span><div class="ph">${GLOBE}</div><span>${escapeHtml(site.name)}</span><span class="sub">${escapeHtml(siteHost(site.url))}</span>`;
+    tile.querySelector('.rm').addEventListener('click', e => {
+      e.stopPropagation();
+      if (!confirm('Remove ' + site.name + '?')) return;
+      sites.splice(idx, 1); saveSites();
+      tvs.forEach(x => { x.favs = x.favs.filter(f => f !== id); }); saveTvs();
+      renderSites(); renderFavs();
+    });
+    bindTile(tile, () => { if (!editingSites) openSite(site); }, () => { if (!editingSites) toggleFav(id); });
+    el.appendChild(tile);
+  });
+  const add = document.createElement('button'); add.className = 'tile add-tile';
+  add.innerHTML = '<div class="ph">+</div><span>Add website</span>';
+  add.addEventListener('click', () => {
+    let url = (prompt('Website address', 'https://') || '').trim();
+    if (!url || url === 'https://') return;
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    try { new URL(url); } catch { toast('That doesn’t look like a web address'); return; }
+    const name = (prompt('Name for the button', siteHost(url)) || siteHost(url)).trim();
+    sites.push({ name, url }); saveSites(); renderSites(); toast('Added ' + name);
+  });
+  el.appendChild(add);
+}
+$('#editSites').addEventListener('click', () => { editingSites = !editingSites; renderSites(); });
+
+function renderAllApps(){ renderPopular(); renderSites(); renderApps(); }
 function renderApps(){
   const t = cur(), el = $('#apps');
   if (!t || !t.apps.length) { el.innerHTML = '<div class="empty">' + (paired ? 'Loading apps…' : 'Connect to see apps.') + '</div>'; return; }
-  const list = [...t.apps].sort((a,b) => (t.favs.includes(b.id) - t.favs.includes(a.id)) || a.title.localeCompare(b.title));
+  const popularIds = new Set(POPULAR.map(p => findPopular(t, p)).filter(Boolean).map(a => a.id));
+  const list = t.apps.filter(a => !popularIds.has(a.id))
+    .sort((a,b) => (t.favs.includes(b.id) - t.favs.includes(a.id)) || a.title.localeCompare(b.title));
   el.innerHTML = '';
-  for (const a of list) {
-    const tile = document.createElement('button'); tile.className = 'tile' + (t.favs.includes(a.id) ? ' fav-on' : '') + (a.id === fgAppId ? ' running' : '');
-    tile.dataset.id = a.id;
-    tile.innerHTML = '<span class="star">★</span>';
-    const ph = document.createElement('div'); ph.className = 'ph'; ph.textContent = a.title.trim()[0] || '?';
-    tile.appendChild(ph); iconImg(a, ph);
-    const s = document.createElement('span'); s.textContent = a.title; tile.appendChild(s);
-    let timer, longPressed = false;
-    tile.addEventListener('pointerdown', () => { longPressed = false; timer = setTimeout(() => { longPressed = true; toggleFav(a.id); }, 550); });
-    ['pointerup','pointerleave','pointercancel'].forEach(ev => tile.addEventListener(ev, () => clearTimeout(timer)));
-    tile.addEventListener('click', () => { if (!longPressed) launch(a); });
-    tile.addEventListener('contextmenu', e => e.preventDefault());
-    el.appendChild(tile);
-  }
+  for (const a of list) el.appendChild(appTile(a));
 }
 function renderFavs(){
   const t = cur(), el = $('#favs');
   el.innerHTML = '';
-  const favs = t ? t.favs.map(id => t.apps.find(a => a.id === id)).filter(Boolean) : [];
-  for (const a of favs) {
+  let count = 0;
+  for (const id of (t ? t.favs : [])) {
     const b = document.createElement('button'); b.className = 'fav';
-    const ph = document.createElement('div'); ph.className = 'ph'; ph.textContent = a.title.trim()[0] || '?';
-    b.appendChild(ph); iconImg(a, ph);
-    const s = document.createElement('span'); s.textContent = a.title; b.appendChild(s);
-    b.addEventListener('click', () => launch(a));
-    el.appendChild(b);
+    if (id.startsWith('web:')) {
+      const site = sites.find(x => 'web:' + x.url === id); if (!site) continue;
+      b.innerHTML = `<div class="ph">${GLOBE}</div>`;
+      const s = document.createElement('span'); s.textContent = site.name; b.appendChild(s);
+      b.addEventListener('click', () => openSite(site));
+    } else {
+      const a = t.apps.find(x => x.id === id); if (!a) continue;
+      const p = POPULAR.find(p => findPopular(t, p) === a);
+      const ph = document.createElement('div'); ph.className = 'ph'; ph.textContent = a.title.trim()[0] || '?';
+      b.appendChild(ph); iconImg(a, ph);
+      const s = document.createElement('span'); s.textContent = p ? p.name : a.title; b.appendChild(s);
+      b.addEventListener('click', () => launch(a));
+    }
+    el.appendChild(b); count++;
   }
+  const favs = { length: count };
   const add = document.createElement('button'); add.className = 'fav add';
   add.innerHTML = '<div class="ph">+</div><span>' + (favs.length ? 'Edit' : 'Add apps') + '</span>';
   add.addEventListener('click', () => { showTab('apps'); if (!favs.length) toast('Long-press an app to add it'); });
@@ -993,9 +1114,14 @@ async function loadAppsAndInputs(){
         const want = ['netflix', 'youtube', 'amazon', 'hulu', 'disney', 'plex'];
         t.favs = t.apps.filter(a => want.some(w => a.id.toLowerCase().includes(w))).slice(0, 4).map(a => a.id);
       }
+      if (!t.siteSeeded) {           // put the saved website on the main screen once
+        t.siteSeeded = true;
+        const id = 'web:' + DEFAULT_SITE.url;
+        if (sites.some(s => s.url === DEFAULT_SITE.url) && !t.favs.includes(id)) t.favs.push(id);
+      }
       saveTvs();
     }
-    renderApps(); renderFavs(); renderHeader();
+    renderAllApps(); renderFavs(); renderHeader();
   } catch { if (!(cur() && cur().apps.length)) $('#apps').innerHTML = '<div class="empty">Couldn’t load apps.</div>'; }
 
   const inEl = $('#inputs');
@@ -1136,7 +1262,7 @@ function renderTvList(){
       if (!confirm('Forget ' + (t.name || t.ip) + '?')) return;
       tvs = tvs.filter(x => x !== t);
       if (t.ip === currentIp) { disconnect(); currentIp = tvs[0] ? tvs[0].ip : ''; }
-      saveTvs(); renderTvList(); renderHeader(); renderApps(); renderFavs();
+      saveTvs(); renderTvList(); renderHeader(); renderAllApps(); renderFavs();
       if (!currentIp) $('#connectedTools').style.display = 'none';
     });
     el.appendChild(row);
@@ -1196,7 +1322,7 @@ document.addEventListener('visibilitychange', () => {
 
 /* ---------- start: show cached apps instantly, then connect ---------- */
 const savedTab = store.get('tab'); if (savedTab && $('#v-' + savedTab)) showTab(savedTab);
-renderHeader(); renderApps(); renderFavs();
+renderHeader(); renderAllApps(); renderFavs();
 if (currentIp) connect(); else { setStatus('off', 'Not connected'); openSheet(); }
 
 window.__couch = { request, pressButton, get paired(){ return paired; } }; // for debugging
