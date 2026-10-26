@@ -1,6 +1,6 @@
 # Couch Remote
 
-A free phone remote for LG webOS TVs. Plain HTML, no build step, no server. It talks straight to the TV over your home Wi‑Fi.
+A free phone remote for LG webOS TVs and Samsung smart TVs (2016 and newer). Plain HTML, no build step, no server. It talks straight to the TV over your home Wi‑Fi.
 
 ## Deploy (Vercel)
 
@@ -10,9 +10,9 @@ A free phone remote for LG webOS TVs. Plain HTML, no build step, no server. It t
 
 ## First-time setup (once per phone)
 
-1. Find the TV's IP: Settings → All Settings → General (or Network) → Wi‑Fi → Advanced Wi‑Fi Settings. Tip: reserve that IP in your router so it never changes.
-2. In the app, enter the IP and expand **"First time? Allow the TV's security certificate"**. Tap the link, accept the browser warning (iPhone: Show Details → visit this website; Android: Advanced → Proceed). A blank/error page afterward is normal.
-3. Back in the app, tap **Connect**, then choose **Accept** on the TV with your normal remote.
+1. Find the TV's IP. LG: Settings → All Settings → General (or Network) → Wi‑Fi → Advanced Wi‑Fi Settings. Samsung: Settings → General → Network → Network Status → IP Settings. Tip: reserve that IP in your router so it never changes.
+2. In the app, pick the TV brand, enter the IP and expand **"First time? Allow the TV's security certificate"**. Tap the link, accept the browser warning (iPhone: Show Details → visit this website; Android: Advanced → Proceed). A blank/error page afterward is normal.
+3. Back in the app, tap **Connect**, then choose **Accept** (LG) or **Allow** (Samsung) on the TV with your normal remote.
 4. If the browser asks to access devices on your local network, allow it.
 
 The pairing key is saved on the phone, so after that it connects on its own.
@@ -33,6 +33,23 @@ The pairing key is saved on the phone, so after that it connects on its own.
 - Sensitivity slider on the Touch tab (separate for Swipe and Pointer; pointer speeds up on quick flicks)
 - Light/dark/auto theme, vibration on/off
 - Screen off; "say hi" test toast
+
+## Samsung TVs
+
+Samsung support uses the TV's own remote connection (`wss://<tv>:8002`), so it needs a 2016 or newer Samsung smart TV (Tizen). The certificate step opens `https://<tv-ip>:8002/api/v2/`.
+
+What's different from LG:
+- No live volume number or mute state, and no "Now on…" in the header: Samsung doesn't report them.
+- **Inputs** shows Source and HDMI 1–4 buttons instead of the TV's own list; no channel list.
+- **Typing:** type the whole search, then tap **Enter** to send it (letters don't appear on the TV one at a time).
+- The installed-app list comes from the TV on most models. If yours doesn't share it, the Popular buttons still try each service's usual Samsung app ID.
+- Touch pad pointer mode works only on models with mouse support; Swipe mode works on all.
+- "Say hi" and Screen off are LG-only.
+- If the TV never shows Allow, or says no: Settings → General → External Device Manager → Device Connection Manager. Set Access Notification to "First Time Only", and check the phone isn't set to Deny in Device List.
+
+## Other brands
+
+Roku, Sony, Vizio, Android/Google TV and Fire TV can't be controlled from a web page on a phone. Roku only accepts plain‑http requests, which browsers block from an https site; Sony and Vizio need request headers those TVs don't allow from a browser; Android/Google TV and Fire TV need raw network connections a browser can't open. Supporting them would need a small helper program running on a computer at home, or a native app.
 
 ## Known limits
 

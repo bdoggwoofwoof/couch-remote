@@ -396,21 +396,23 @@ input[type=range]{width:160px;accent-color:var(--accent)}
     <h4>Add a TV</h4>
   </div>
 
+  <label>TV brand</label>
+  <div class="seg" id="brandSeg"><button data-brand="lg">LG</button><button data-brand="samsung">Samsung</button></div>
   <label for="ipField">TV's IP address</label>
   <input class="field" id="ipField" inputmode="decimal" placeholder="192.168.1.50" autocomplete="off">
-  <p class="note" style="margin-top:8px">On the TV: Settings → All Settings → General (or Network) → Wi-Fi → Advanced Wi-Fi Settings. Tip: reserve that address in your router so it never changes.</p>
+  <p class="note" style="margin-top:8px">LG: Settings → All Settings → General (or Network) → Wi-Fi → Advanced Wi-Fi Settings. Samsung: Settings → General → Network → Network Status → IP Settings. Tip: reserve that address in your router so it never changes.</p>
 
   <button class="btn" id="connectBtn">Connect</button>
   <div class="msg" id="setupMsg"></div>
 
   <details id="certHelp">
     <summary>First time? Allow the TV's security certificate</summary>
-    <p>LG TVs use a self-signed certificate, so your browser has to be told to trust it once per TV.</p>
+    <p>LG and Samsung TVs use a self-signed certificate, so your browser has to be told to trust it once per TV.</p>
     <ol class="steps">
       <li>Tap <b><a id="certLink" href="#" target="_blank" rel="noopener">Open the TV's address</a></b>.</li>
       <li>You'll see a privacy warning. On iPhone tap <b>Show Details → visit this website</b>. On Android tap <b>Advanced → Proceed</b>.</li>
       <li id="certReturnStep">A blank or error page after that is normal. Come back here and tap <b>Connect</b>.</li>
-      <li>Accept the request that pops up on the TV with your physical remote. You only do this once.</li>
+      <li>Choose <b>Accept</b> (LG) or <b>Allow</b> (Samsung) on the TV with your physical remote. You only do this once.</li>
     </ol>
     <p>If your browser asks to <b>access devices on your local network</b>, choose Allow.</p>
   </details>
@@ -508,6 +510,9 @@ function renderHeader(){
 function setupMsg(kind, html){ const m=$('#setupMsg'); m.className='msg show ' + kind; m.innerHTML = html; }
 function clearSetupMsg(){ $('#setupMsg').className='msg'; }
 
+const isSamsung = t => !!t && t.brand === 'samsung';
+// The page to open once so the browser trusts the TV's certificate (LG: port 3001, Samsung: 8002).
+const certUrl = (ip, brand) => brand === 'samsung' ? `https://${ip}:8002/api/v2/` : `https://${ip}:3001/`;
 function candidateUrls(host){
   // Newer TVs (2018+ firmware) only answer on the secure port. A page served over
   // https can only open wss://, so the insecure port is tried only from http pages.
@@ -520,10 +525,11 @@ function connect(){
   if (!currentIp) { openSheet(); return; }
   disconnect(true);
   connLog.length = 0; t0.v = performance.now(); iconFailLogged = false;
-  log('Couch Remote → ' + currentIp + ' · ' + (IS_IOS_OTHER_BROWSER ? 'iPhone (non-Safari browser)' : IS_IOS ? 'iPhone Safari' : 'non-iPhone browser') + (IS_STANDALONE ? ' · home-screen icon' : ' · browser tab'));
+  log('Couch Remote → ' + (isSamsung(cur()) ? 'Samsung ' : 'LG ') + currentIp + ' · ' + (IS_IOS_OTHER_BROWSER ? 'iPhone (non-Safari browser)' : IS_IOS ? 'iPhone Safari' : 'non-iPhone browser') + (IS_STANDALONE ? ' · home-screen icon' : ' · browser tab'));
   urls = candidateUrls(currentIp); attempt = 0; triedUnsigned = false;
-  $('#certLink').href = `https://${currentIp}:3001/`;
+  $('#certLink').href = certUrl(currentIp, cur() && cur().brand);
   renderHeader(); renderAllApps(); renderFavs();
+  if (isSamsung(cur())) return connectSamsung();
   openSocket();
 }
 
@@ -782,6 +788,7 @@ function onPaired(){
   paired = true;
   clearSetupMsg();
   $('#connectedTools').style.display = '';
+  $('#typeNote').textContent = LG_TYPE_NOTE;
   if ($('#sheet').classList.contains('open')) closeSheet();
   renderHeader();
   toast('Connected');
@@ -817,6 +824,13 @@ function openPointer(){
 function closePointer(){ if (pws) { try{pws.close();}catch{} } pws = null; pointerReady = null; }
 
 async function pointerSend(type, fields){
+  if (isSamsung(cur())) {
+    if (!paired) { notConnected(); return false; }
+    if (type === 'move') ssRemote({ Cmd: 'Move', Position: { x: fields.dx, y: fields.dy, Time: String(Date.now()) }, TypeOfRemote: 'ProcessMouseDevice' });
+    else if (type === 'click') ssRemote({ Cmd: 'LeftClick', TypeOfRemote: 'ProcessMouseDevice' });
+    else if (type === 'scroll' && fields.dy) ssKey(fields.dy > 0 ? 'KEY_DOWN' : 'KEY_UP');
+    return true;
+  }
   let s = pws;
   if (!s || s.readyState !== 1) {
     if (!paired) { notConnected(); return false; }
@@ -829,6 +843,133 @@ async function pointerSend(type, fields){
   return true;
 }
 
+/* ---------- Samsung (Tizen, 2016 and newer) ----------
+   Samsung TVs take remote keys over wss://<tv>:8002/api/v2/channels/samsung.remote.control,
+   through the same sandboxed relay as LG. The first connection shows "Allow" on the TV; the
+   TV then hands back a token that skips the prompt next time. There is no volume or
+   current-app feedback, so those parts of the screen stay quiet on Samsung. */
+const SS_KEY = {
+  UP:'KEY_UP', DOWN:'KEY_DOWN', LEFT:'KEY_LEFT', RIGHT:'KEY_RIGHT', ENTER:'KEY_ENTER', BACK:'KEY_RETURN',
+  HOME:'KEY_HOME', EXIT:'KEY_EXIT', QMENU:'KEY_MENU', INFO:'KEY_INFO', CHANNELUP:'KEY_CHUP', CHANNELDOWN:'KEY_CHDOWN',
+  PLAY:'KEY_PLAY', PAUSE:'KEY_PAUSE', REWIND:'KEY_REWIND', FASTFORWARD:'KEY_FF', VOLUMEUP:'KEY_VOLUP',
+  VOLUMEDOWN:'KEY_VOLDOWN', MUTE:'KEY_MUTE', POWER:'KEY_POWER', DASH:'KEY_PLUS100',
+  0:'KEY_0', 1:'KEY_1', 2:'KEY_2', 3:'KEY_3', 4:'KEY_4', 5:'KEY_5', 6:'KEY_6', 7:'KEY_7', 8:'KEY_8', 9:'KEY_9'
+};
+const SS_INPUTS = [['Source', 'KEY_SOURCE'], ['HDMI 1', 'KEY_HDMI1'], ['HDMI 2', 'KEY_HDMI2'], ['HDMI 3', 'KEY_HDMI3'], ['HDMI 4', 'KEY_HDMI4']];
+const SS_TIP = `On the TV, open <b>Settings → General → External Device Manager → Device Connection Manager</b>. Set <b>Access Notification</b> to “First Time Only”, and under <b>Device List</b> make sure this phone isn't set to Deny.`;
+const b64 = str => { let bin = ''; for (const c of new TextEncoder().encode(str)) bin += String.fromCharCode(c); return btoa(bin); };
+const ssKey = key => rawSend({ method: 'ms.remote.control', params: { Cmd: 'Click', DataOfCmd: key, Option: 'false', TypeOfRemote: 'SendRemoteKey' } });
+const ssEmit = (event, data) => rawSend({ method: 'ms.channel.emit', params: Object.assign({ event, to: 'host' }, data ? { data } : {}) });
+const ssRemote = params => rawSend({ method: 'ms.remote.control', params });
+
+function connectSamsung(){
+  const t = cur();
+  const token = t && t.key && t.key !== '-' ? '&token=' + encodeURIComponent(t.key) : '';
+  const url = `wss://${currentIp}:8002/api/v2/channels/samsung.remote.control?name=${encodeURIComponent(b64('Couch Remote'))}${token}`;
+  setStatus('wait', 'Connecting…');
+  setupMsg('wait', 'Trying to reach your TV…');
+  log('Opening ' + url.replace(/token=[^&]+/, 'token=(saved)'));
+  let opened = false, settled = false;
+  const sock = new TvSocket(url);
+  ws = sock;
+  const timer = setTimeout(() => {
+    if (opened || settled || sock !== ws) return;
+    settled = true;
+    log('No answer after 7s (connection hung)');
+    sock.onopen = sock.onclose = sock.onerror = sock.onmessage = null;
+    try { sock.close(); } catch {}
+    samsungFailed('timeout');
+  }, 7000);
+  sock.onopen = () => {
+    opened = true; clearTimeout(timer);
+    log('Reached the TV. Waiting for it to let this phone in');
+    if (!token) { setStatus('wait', 'Allow on the TV'); openSheet(); setupMsg('wait', 'Look at your TV and choose <b>Allow</b> with your regular remote. (It can take a few seconds to appear.)'); }
+    clearPairTimer();
+    pairTimer = setTimeout(() => {
+      if (paired) return;
+      log('TV did not let this phone in within 40s');
+      openSheet(); setStatus('off', 'Not connected');
+      setupMsg('bad', `The TV didn't let this phone in. If no request appeared on the TV, check this: ${SS_TIP} Then tap <b>Connect</b>.`);
+    }, 40000);
+  };
+  sock.onerror = () => log('Connection error');
+  sock.onmessage = ev => { if (sock === ws) handleSamsung(ev.data); };
+  sock.onclose = ev => {
+    clearTimeout(timer);
+    log(`Connection closed (code ${ev.code}${ev.reason ? ', ' + ev.reason : ''})`);
+    if (sock !== ws || settled) return;
+    settled = true;
+    if (!opened) return samsungFailed('closed');
+    const wasPaired = paired;
+    dropConnection();
+    if (wasPaired) { setStatus('off', 'Disconnected — tap to reconnect'); return; }
+    setStatus('off', 'Not connected');
+    openSheet(); $('#connDetails').open = true;
+    setupMsg('bad', `Your phone reached the TV, but the TV hung up before letting this phone in. ${SS_TIP} Then tap Connect.`);
+  };
+}
+function samsungFailed(why){
+  ws = null;
+  setStatus('off', 'Couldn’t reach the TV');
+  openSheet();
+  $('#certHelp').open = true; $('#connDetails').open = true;
+  const ip = escapeHtml(currentIp);
+  let tips = `<li>Check the TV is on and on the same Wi-Fi as your phone, and that <b>${ip}</b> is its current IP address.</li>
+    <li>Do the certificate step below (tap the link, accept the warning), then tap <b>Connect</b> again.</li>`;
+  if (IS_IOS) tips += `<li>In iPhone <b>Settings → Privacy &amp; Security → Local Network</b>, turn on ${IS_IOS_OTHER_BROWSER ? 'your browser (e.g. Chrome)' : 'Safari Websites'}.</li>`;
+  tips += `<li>Samsung TVs from before 2016 don't have this kind of remote connection, so they can't be used.</li><li>${SS_TIP}</li>`;
+  setupMsg('bad', `Couldn’t connect to the TV at <b>${ip}</b>${why === 'timeout' ? ' (the connection hung)' : ''}.<ol class="steps">${tips}</ol>`);
+}
+function handleSamsung(data){
+  let msg; try { msg = JSON.parse(data); } catch { return; }
+  const ev = msg.event;
+  if (ev === 'ms.channel.connect') {
+    log('TV let this phone in');
+    const t = upsertTv(currentIp);
+    const tok = msg.data && msg.data.token;
+    t.key = tok ? String(tok) : (t.key || '-');   // '-' = allowed, but this TV gives no token
+    saveTvs();
+    onPairedSamsung();
+  } else if (ev === 'ms.channel.unauthorized' || ev === 'ms.channel.timeOut') {
+    clearPairTimer();
+    log('TV refused: ' + ev);
+    const t = cur(); if (t) { t.key = ''; saveTvs(); }
+    setStatus('off', 'Not connected'); openSheet();
+    setupMsg('bad', `The TV didn't let this phone in. ${SS_TIP} Then tap <b>Connect</b> and choose Allow.`);
+  } else if (ev === 'ed.installedApp.get') {
+    const list = (msg.data && msg.data.data) || [];
+    const t = cur(); if (!t) return;
+    log(`TV listed ${list.length} apps`);
+    t.listOk = true;
+    t.apps = list.filter(a => a.name && a.appId).map(a => ({ id: a.appId, title: a.name, icon: '', type: a.app_type }));
+    seedFavs(t); saveTvs();
+    renderAllApps(); renderFavs(); renderHeader();
+  } else if (ev === 'ms.remote.imeStart') setKeyboardWanted(true);
+  else if (ev === 'ms.remote.imeEnd') setKeyboardWanted(false);
+  else if (ev === 'ms.error') log('TV error: ' + JSON.stringify(msg.data || {}).slice(0, 160));
+}
+function onPairedSamsung(){
+  paired = true;
+  clearPairTimer(); clearSetupMsg();
+  $('#connectedTools').style.display = 'none';
+  $('#typeNote').textContent = 'Type what to search, then tap Enter to send it to the TV. Select a search box on the TV first.';
+  $('#volLabel').textContent = 'VOL';
+  const t = cur();
+  if (t && !t.name) { t.name = 'Samsung TV'; saveTvs(); }
+  if ($('#sheet').classList.contains('open')) closeSheet();
+  renderHeader();
+  toast('Connected');
+  ssEmit('ed.installedApp.get');
+  const inEl = $('#inputs'); inEl.innerHTML = '';
+  for (const [label, key] of SS_INPUTS) {
+    const c = document.createElement('button'); c.className = 'chip'; c.textContent = label;
+    c.addEventListener('click', () => { buzz(); ssKey(key); });
+    inEl.appendChild(c);
+  }
+  channels = []; $('#chanWrap').style.display = 'none';
+  if (!(t && t.apps.length)) renderApps();
+}
+
 // Buttons that also have an ssap fallback if the pointer socket is unavailable.
 const FALLBACK = {
   VOLUMEUP:'ssap://audio/volumeUp', VOLUMEDOWN:'ssap://audio/volumeDown',
@@ -838,6 +979,7 @@ const FALLBACK = {
 };
 async function pressButton(name){
   if (!paired) return notConnected();
+  if (isSamsung(cur())) { if (SS_KEY[name]) ssKey(SS_KEY[name]); return; }
   const ok = await pointerSend('button', { name });
   if (!ok && FALLBACK[name]) request(FALLBACK[name]).catch(()=>{});
 }
@@ -852,12 +994,14 @@ function applyVolume(r){
 }
 function changeVolume(dir){
   if (!paired) return notConnected();
+  if (isSamsung(cur())) return ssKey(dir === 'up' ? 'KEY_VOLUP' : 'KEY_VOLDOWN');
   if (volume != null) { volume = Math.max(0, Math.min(100, volume + (dir === 'up' ? 1 : -1))); $('#volLabel').textContent = volume; }
   request(dir === 'up' ? 'ssap://audio/volumeUp' : 'ssap://audio/volumeDown').catch(()=>{});
 }
 $('#muteBtn').addEventListener('click', () => {
   if (!paired) return notConnected();
   buzz();
+  if (isSamsung(cur())) return ssKey('KEY_MUTE');   // the TV doesn't report mute state
   muted = !muted; $('#muteBtn').classList.toggle('on', muted);
   request('ssap://audio/setMute', { mute: muted }).catch(()=>{});
 });
@@ -879,6 +1023,7 @@ document.querySelectorAll('[data-vol]').forEach(el => bindPress(el, () => change
 document.querySelectorAll('[data-ssap]').forEach(el => el.addEventListener('click', () => {
   if (!paired) return notConnected();
   buzz(15);
+  if (isSamsung(cur())) { if (el.dataset.ssap.includes('turnOff')) { ssKey('KEY_POWER'); toast('TV turning off'); } return; }
   request(el.dataset.ssap).then(()=>{ if (el.dataset.ssap.includes('turnOff')) toast('TV turning off'); }).catch(e=>toast(e.message));
 }));
 document.querySelectorAll('[data-goto]').forEach(el => el.addEventListener('click', () => showTab(el.dataset.goto)));
@@ -1025,6 +1170,13 @@ const LAUNCH_ROUTES = [
 ];
 let launchRoute = 0;   // remember which one worked
 async function launchApp(id){
+  if (isSamsung(cur())) {
+    // The TV doesn't confirm launches. App type 4 is a built-in app; store apps open as deep links.
+    const a = cur().apps.find(x => x.id === id);
+    ssEmit('ed.apps.launch', { appId: id, action_type: a && a.type === 4 ? 'NATIVE_LAUNCH' : 'DEEP_LINK', metaTag: '' });
+    log(`Launch ${id} sent to Samsung`);
+    return {};
+  }
   let lastErr;
   for (let k = 0; k < LAUNCH_ROUTES.length; k++) {
     const i = (launchRoute + k) % LAUNCH_ROUTES.length;
@@ -1044,16 +1196,16 @@ function launch(a){
 /* The big streaming apps, always shown in this order. Matched against the TV's own
    installed-app list by name (IDs vary by region and TV year). */
 const POPULAR = [
-  { name: 'YouTube',     color: '#FF0000', re: /^youtube$/i,          ids: ['youtube.leanback.v4'], logo: 'youtube', fg: '#FF0000', bg: '#FFFFFF' },
-  { name: 'YouTube TV',  color: '#CC0000', re: /you\s*tube\s*tv/i,    ids: ['youtube.leanback.ytv.v1'], idRe: /ytv|youtube.*tv|tv.*youtube/i, logo: 'youtubetv', fg: '#FF0000', bg: '#FFFFFF', scale: 88 },
-  { name: 'Netflix',     color: '#E50914', re: /^netflix$/i,          ids: ['netflix'], logo: 'netflix', fg: '#E50914', bg: '#000000' },
-  { name: 'Disney+',     color: '#0E3D8F', re: /^disney\s*(\+|plus)/i, ids: ['com.disney.disneyplus-prod'], logo: 'disney', fg: '#FFFFFF', bg: '#0E3D8F', scale: 74 },
-  { name: 'Hulu',        color: '#1CE783', re: /^hulu$/i,             ids: ['hulu'], logo: 'hulu', fg: '#000000', bg: '#1CE783', scale: 82 },
-  { name: 'Paramount+',  color: '#0064FF', re: /^paramount/i,         ids: [], logo: 'paramountplus', fg: '#FFFFFF', bg: '#0064FF' },
-  { name: 'Prime Video', color: '#00A8E1', re: /prime video|^amazon/i, ids: ['amazon'], logo: 'primevideo', fg: '#FFFFFF', bg: '#00A8E1', scale: 86 },
-  { name: 'HBO Max',     color: '#002BE7', re: /^(hbo\s*)?max$|^hbo/i, ids: [], logo: 'hbomax', fg: '#FFFFFF', bg: '#000000', scale: 80 },
-  { name: 'Apple TV',    color: '#1d1d1f', re: /^apple tv/i,          ids: ['com.apple.appletv'], logo: 'appletv', fg: '#FFFFFF', bg: '#000000' },
-  { name: 'Peacock',     color: '#1d1d1f', re: /^peacock/i,          ids: [], logo: 'peacock', fg: '#FFFFFF', bg: '#000000', scale: 74 },
+  { name: 'YouTube',     color: '#FF0000', re: /^youtube$/i,          sid: '111299001912', ids: ['youtube.leanback.v4'], logo: 'youtube', fg: '#FF0000', bg: '#FFFFFF' },
+  { name: 'YouTube TV',  color: '#CC0000', re: /you\s*tube\s*tv/i,    sid: '3201707014489', ids: ['youtube.leanback.ytv.v1'], idRe: /ytv|youtube.*tv|tv.*youtube/i, logo: 'youtubetv', fg: '#FF0000', bg: '#FFFFFF', scale: 88 },
+  { name: 'Netflix',     color: '#E50914', re: /^netflix$/i,          sid: '3201907018807', ids: ['netflix'], logo: 'netflix', fg: '#E50914', bg: '#000000' },
+  { name: 'Disney+',     color: '#0E3D8F', re: /^disney\s*(\+|plus)/i, sid: '3201901017640', ids: ['com.disney.disneyplus-prod'], logo: 'disney', fg: '#FFFFFF', bg: '#0E3D8F', scale: 74 },
+  { name: 'Hulu',        color: '#1CE783', re: /^hulu$/i,             sid: '3201601007625', ids: ['hulu'], logo: 'hulu', fg: '#000000', bg: '#1CE783', scale: 82 },
+  { name: 'Paramount+',  color: '#0064FF', re: /^paramount/i,         sid: '3201710015037', ids: [], logo: 'paramountplus', fg: '#FFFFFF', bg: '#0064FF' },
+  { name: 'Prime Video', color: '#00A8E1', re: /prime video|^amazon/i, sid: '3201910019365', ids: ['amazon'], logo: 'primevideo', fg: '#FFFFFF', bg: '#00A8E1', scale: 86 },
+  { name: 'HBO Max',     color: '#002BE7', re: /^(hbo\s*)?max$|^hbo/i, sid: '3202301029760', ids: [], logo: 'hbomax', fg: '#FFFFFF', bg: '#000000', scale: 80 },
+  { name: 'Apple TV',    color: '#1d1d1f', re: /^apple tv/i,          sid: '3201807016597', ids: ['com.apple.appletv'], logo: 'appletv', fg: '#FFFFFF', bg: '#000000' },
+  { name: 'Peacock',     color: '#1d1d1f', re: /^peacock/i,          sid: '3202006020991', ids: [], logo: 'peacock', fg: '#FFFFFF', bg: '#000000', scale: 74 },
 ];
 /* Brand logos bundled in the app. Most are from Simple Icons (https://simpleicons.org,
    CC0-1.0); Disney+ and Peacock are outline icons from Arcticons
@@ -1071,13 +1223,15 @@ function popularBadge(p){
   }
   return ph;
 }
+const popularIds = p => isSamsung(cur()) ? (p.sid ? [p.sid] : []) : p.ids;
 function findPopular(t, p){
-  return t && (t.apps.find(a => p.ids.includes(a.id))
+  return t && (t.apps.find(a => popularIds(p).includes(a.id))
     || (p.idRe && t.apps.find(a => p.idRe.test(a.id)))
     || t.apps.find(a => p.re.test(a.title.trim())));
 }
 function openStore(name){
   if (!paired) return notConnected();
+  if (isSamsung(cur())) return toast(name + ' isn’t installed — find it under Apps on the TV');
   const t = cur();
   const storeApp = t && t.apps.find(a => /content store|^apps$|^lg store/i.test(a.title.trim()));
   toast(name + ' isn’t installed — search for it in the LG app store');
@@ -1095,6 +1249,7 @@ function openSite(s){
   log('Tapped website ' + s.url);
   if (!paired) return notConnected();
   buzz();
+  if (isSamsung(cur())) { ssEmit('ed.apps.launch', { appId: 'org.tizen.browser', action_type: 'NATIVE_LAUNCH', metaTag: s.url }); return toast('Opening ' + s.name + ' on the TV'); }
   request('ssap://system.launcher/open', { target: s.url }).then(() => toast('Opening ' + s.name + ' on the TV')).catch(e => toast(e.message));
 }
 const GLOBE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>';
@@ -1145,7 +1300,7 @@ function renderPopular(){
     tile.appendChild(popularBadge(p));
     tile.insertAdjacentHTML('beforeend', `<span>${escapeHtml(p.name)}</span>` + (loaded ? '<span class="sub">Not installed</span>' : ''));
     // No app list from the TV? Still try the service's usual LG app ID.
-    bindTile(tile, () => loaded ? openStore(p.name) : (paired && p.ids.length ? launch({ id: p.ids[0], title: p.name }) : notConnected()));
+    bindTile(tile, () => loaded ? openStore(p.name) : (paired && popularIds(p).length ? launch({ id: popularIds(p)[0], title: p.name }) : notConnected()));
     el.appendChild(tile);
   }
 }
@@ -1223,6 +1378,17 @@ function renderFavs(){
   el.appendChild(add);
 }
 
+function seedFavs(t){
+  if (!t.favs.length) {          // sensible starter favorites
+    const want = ['netflix', 'youtube', 'amazon', 'prime video', 'hulu', 'disney', 'plex'];
+    t.favs = t.apps.filter(a => want.some(w => (a.id + ' ' + a.title).toLowerCase().includes(w))).slice(0, 4).map(a => a.id);
+  }
+  if (!t.siteSeeded) {           // put the saved website on the main screen once
+    t.siteSeeded = true;
+    const id = 'web:' + DEFAULT_SITE.url;
+    if (sites.some(s => s.url === DEFAULT_SITE.url) && !t.favs.includes(id)) t.favs.push(id);
+  }
+}
 async function loadAppsAndInputs(){
   try {
     const r = await request('ssap://com.webos.applicationManager/listLaunchPoints');
@@ -1233,15 +1399,7 @@ async function loadAppsAndInputs(){
       t.apps = lps.filter(a => a.title).map(a => ({ id: a.appId || a.id, title: a.title, icon: a.icon || a.largeIcon || '' }));
       const yt = t.apps.filter(a => /tube/i.test(a.title + ' ' + a.id));
       if (yt.length) log('YouTube-like apps on TV: ' + yt.map(a => `${a.title} [${a.id}]`).join(', '));
-      if (!t.favs.length) {          // sensible starter favorites
-        const want = ['netflix', 'youtube', 'amazon', 'hulu', 'disney', 'plex'];
-        t.favs = t.apps.filter(a => want.some(w => a.id.toLowerCase().includes(w))).slice(0, 4).map(a => a.id);
-      }
-      if (!t.siteSeeded) {           // put the saved website on the main screen once
-        t.siteSeeded = true;
-        const id = 'web:' + DEFAULT_SITE.url;
-        if (sites.some(s => s.url === DEFAULT_SITE.url) && !t.favs.includes(id)) t.favs.push(id);
-      }
+      seedFavs(t);
       saveTvs();
     }
     renderAllApps(); renderFavs(); renderHeader();
@@ -1313,6 +1471,7 @@ $('#kbBanner').addEventListener('click', () => {
   $('#kbBanner').classList.remove('show');
 });
 function sendText(now){
+  if (isSamsung(cur())) { prevText = now; return; }   // sent as a whole on Enter
   if (!paired) { prevText = now; return notConnected(); }
   let i = 0; while (i < prevText.length && i < now.length && prevText[i] === now[i]) i++;
   const del = prevText.length - i, add = now.slice(i);
@@ -1327,12 +1486,19 @@ field.addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); sendEnter(); }
   else if (e.key === 'Backspace' && !field.value) { e.preventDefault(); delOne(); }
 });
-function sendEnter(){ if (!paired) return notConnected(); buzz(); request('ssap://com.webos.service.ime/sendEnterKey').catch(()=>{}); field.value=''; prevText=''; }
-function delOne(){ if (!paired) return notConnected(); buzz(); request('ssap://com.webos.service.ime/deleteCharacters', { count: 1 }).catch(()=>{}); if (field.value) { field.value=field.value.slice(0,-1); prevText=field.value; } }
+function sendEnter(){
+  if (!paired) return notConnected(); buzz();
+  if (isSamsung(cur())) {
+    if (field.value) { ssRemote({ Cmd: b64(field.value), DataOfCmd: 'base64', TypeOfRemote: 'SendInputString' }); ssRemote({ TypeOfRemote: 'SendInputEnd' }); }
+    else ssKey('KEY_ENTER');
+    field.value = ''; prevText = ''; return;
+  }
+  request('ssap://com.webos.service.ime/sendEnterKey').catch(()=>{}); field.value=''; prevText=''; }
+function delOne(){ if (!paired) return notConnected(); buzz(); if (isSamsung(cur())) { field.value = field.value.slice(0, -1); prevText = field.value; return; } request('ssap://com.webos.service.ime/deleteCharacters', { count: 1 }).catch(()=>{}); if (field.value) { field.value=field.value.slice(0,-1); prevText=field.value; } }
 $('#kbEnter').addEventListener('click', sendEnter);
 $('#kbBack').addEventListener('click', delOne);
 $('#kbClear').addEventListener('click', () => {
-  if (paired && prevText) request('ssap://com.webos.service.ime/deleteCharacters', { count: prevText.length }).catch(()=>{});
+  if (paired && prevText && !isSamsung(cur())) request('ssap://com.webos.service.ime/deleteCharacters', { count: prevText.length }).catch(()=>{});
   field.value=''; prevText=''; field.focus();
 });
 
@@ -1391,7 +1557,7 @@ function renderTvList(){
   el.innerHTML = '';
   for (const t of tvs) {
     const row = document.createElement('div'); row.className = 'tv-item' + (t.ip === currentIp ? ' current' : '');
-    row.innerHTML = `<div class="t"><div>${escapeHtml(t.name || 'LG TV')}</div><small>${escapeHtml(t.ip)}${t.key ? '' : ' · not paired'}</small></div><span class="check">✓</span><button class="x" aria-label="Forget">×</button>`;
+    row.innerHTML = `<div class="t"><div>${escapeHtml(t.name || (isSamsung(t) ? 'Samsung TV' : 'LG TV'))}</div><small>${escapeHtml(t.ip)}${t.key ? '' : ' · not paired'}</small></div><span class="check">✓</span><button class="x" aria-label="Forget">×</button>`;
     row.querySelector('.t').addEventListener('click', () => {
       if (t.ip === currentIp && paired) { closeSheet(); return; }
       currentIp = t.ip; saveTvs(); renderTvList(); clearSetupMsg(); connect();
@@ -1406,10 +1572,17 @@ function renderTvList(){
     el.appendChild(row);
   }
 }
+let pickBrand = (cur() && cur().brand) || 'lg';
+function setBrand(b){
+  pickBrand = b;
+  document.querySelectorAll('#brandSeg button').forEach(x => x.classList.toggle('active', x.dataset.brand === b));
+  const v = $('#ipField').value.trim() || currentIp;
+  $('#certLink').href = v ? certUrl(v, b) : '#';
+}
+document.querySelectorAll('#brandSeg button').forEach(b => b.addEventListener('click', () => { buzz(5); setBrand(b.dataset.brand); }));
 function openSheet(){
   $('#ipField').value = tvs.length ? '' : currentIp;
-  const v = $('#ipField').value || currentIp;
-  $('#certLink').href = v ? `https://${v}:3001/` : '#';
+  setBrand(tvs.length ? pickBrand : ((cur() && cur().brand) || pickBrand));
   renderTvList();
   $('#sheet').classList.add('open'); $('#sheetBg').classList.add('open');
 }
@@ -1420,12 +1593,14 @@ $('#sheetBg').addEventListener('click', closeSheet);
 $('#title').addEventListener('click', () => { if (!paired && currentIp && !ws) connect(); else openSheet(); });
 $('#ipField').addEventListener('input', () => {
   const v = $('#ipField').value.trim();
-  $('#certLink').href = v ? `https://${v}:3001/` : '#';
+  $('#certLink').href = v ? certUrl(v, pickBrand) : '#';
 });
 $('#connectBtn').addEventListener('click', () => {
   const v = ($('#ipField').value.trim() || currentIp).replace(/^\w+:\/\//,'').replace(/[:/].*$/,'');
   if (!/^[\w.-]+$/.test(v)) { setupMsg('bad', 'Enter the TV’s IP address, like 192.168.1.50.'); return; }
-  upsertTv(v); currentIp = v; saveTvs();
+  const t = upsertTv(v);
+  if ((t.brand || 'lg') !== pickBrand) { t.brand = pickBrand; t.key = ''; t.apps = []; }
+  currentIp = v; saveTvs();
   setupMsg('wait', 'Connecting…');
   connect();
 });
@@ -1442,8 +1617,10 @@ if (IS_STANDALONE) {
 $('#certLink').addEventListener('click', e => {
   const v = ($('#ipField').value.trim() || currentIp).replace(/^\w+:\/\//,'').replace(/[:/].*$/,'');
   if (!/^[\w.-]+$/.test(v)) { e.preventDefault(); setupMsg('bad', 'Enter the TV’s IP address first, like 192.168.1.50.'); return; }
-  upsertTv(v); currentIp = v; saveTvs();
-  e.currentTarget.href = `https://${v}:3001/`;
+  const t = upsertTv(v);
+  if ((t.brand || 'lg') !== pickBrand) { t.brand = pickBrand; t.key = ''; t.apps = []; }
+  currentIp = v; saveTvs();
+  e.currentTarget.href = certUrl(v, pickBrand);
 });
 $('#copyLog').addEventListener('click', async () => {
   const text = connLog.join('\n') + '\n\n' + navigator.userAgent;
@@ -1474,6 +1651,15 @@ function resume(){
   // iOS can freeze the socket in the background and hand back a dead one that still looks
   // open. Ask the TV something small; if it doesn't answer quickly, reconnect.
   const sock = ws;
+  if (isSamsung(t)) {
+    if (!t.listOk) return connect();
+    let answered = false;
+    const prev = sock.onmessage;
+    sock.onmessage = ev => { if (/ed\.installedApp\.get/.test(ev.data)) answered = true; prev && prev(ev); };
+    ssEmit('ed.installedApp.get');
+    setTimeout(() => { sock.onmessage = prev; if (!answered && ws === sock) { log('No answer after returning to the app; reconnecting'); connect(); } }, 2500);
+    return;
+  }
   Promise.race([request('ssap://audio/getVolume'), new Promise((_, rej) => setTimeout(() => rej(new Error('stale')), 2500))])
     .catch(() => { if (ws === sock) { log('No answer after returning to the app; reconnecting'); connect(); } });
 }
@@ -1485,6 +1671,7 @@ const savedTab = store.get('tab'); if (savedTab && $('#v-' + savedTab)) showTab(
 renderHeader(); renderAllApps(); renderFavs();
 if (currentIp) connect(); else { setStatus('off', 'Not connected'); openSheet(); }
 
+const LG_TYPE_NOTE = $('#typeNote').textContent;
 window.__couch = { request, pressButton, get paired(){ return paired; } }; // for debugging
 })();
 </script>
