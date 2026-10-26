@@ -39,7 +39,7 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
   font:16px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
-  overscroll-behavior:none;-webkit-user-select:none;user-select:none}
+  overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 /* Full-screen layout. iOS 26 home-screen web apps (viewport-fit=cover + black-translucent
    status bar) get a viewport that is short by the status-bar height (WebKit bug 301108), and
    position:fixed content stops at that short edge. So the page itself is stretched to the real
@@ -503,6 +503,7 @@ function renderHeader(){
   const app = t && t.apps.find(a => a.id === fgAppId);
   setStatus('on', app ? 'Now on ' + app.title : 'Connected');
   document.querySelectorAll('.tile').forEach(el => el.classList.toggle('running', el.dataset.id === fgAppId));
+  document.querySelectorAll('#inputs .chip').forEach(el => el.classList.toggle('on', !!el.dataset.appId && el.dataset.appId === fgAppId));
 }
 function setupMsg(kind, html){ const m=$('#setupMsg'); m.className='msg show ' + kind; m.innerHTML = html; }
 function clearSetupMsg(){ $('#setupMsg').className='msg'; }
@@ -806,9 +807,10 @@ function openPointer(){
     if (!path) return reject(new Error('no socket'));
     if (location.protocol === 'https:' && path.startsWith('ws://')) path = path.replace(/^ws:\/\/([^/:]+):3000/, 'wss://$1:3001');
     const s = new TvSocket(path);
-    s.onopen = () => { pws = s; resolve(s); };
-    s.onerror = () => reject(new Error('pointer socket failed'));
-    s.onclose = () => { if (pws === s) { pws = null; pointerReady = null; } };
+    const timer = setTimeout(() => { reject(new Error('pointer socket timeout')); try { s.close(); } catch {} }, 5000);
+    s.onopen = () => { clearTimeout(timer); pws = s; resolve(s); };
+    s.onerror = () => { clearTimeout(timer); reject(new Error('pointer socket failed')); };
+    s.onclose = () => { clearTimeout(timer); reject(new Error('pointer socket closed')); if (pws === s) { pws = null; pointerReady = null; } };
   }));
   pointerReady.catch(()=>{ pointerReady = null; });
 }
@@ -1265,7 +1267,7 @@ async function loadAppsAndInputs(){
     if (!list.length) inEl.innerHTML = '<div class="empty">No inputs found.</div>';
     for (const d of list) {
       const c = document.createElement('button'); c.className = 'chip' + (d.appId && d.appId === fgAppId ? ' on' : '');
-      c.textContent = d.label || d.id;
+      c.textContent = d.label || d.id; if (d.appId) c.dataset.appId = d.appId;
       c.addEventListener('click', () => {
         buzz();
         request('ssap://tv/switchInput', { inputId: d.id }).then(()=>toast('Switched to ' + c.textContent)).catch(e=>toast(e.message));
@@ -1329,7 +1331,10 @@ function sendEnter(){ if (!paired) return notConnected(); buzz(); request('ssap:
 function delOne(){ if (!paired) return notConnected(); buzz(); request('ssap://com.webos.service.ime/deleteCharacters', { count: 1 }).catch(()=>{}); if (field.value) { field.value=field.value.slice(0,-1); prevText=field.value; } }
 $('#kbEnter').addEventListener('click', sendEnter);
 $('#kbBack').addEventListener('click', delOne);
-$('#kbClear').addEventListener('click', () => { field.value=''; prevText=''; field.focus(); });
+$('#kbClear').addEventListener('click', () => {
+  if (paired && prevText) request('ssap://com.webos.service.ime/deleteCharacters', { count: prevText.length }).catch(()=>{});
+  field.value=''; prevText=''; field.focus();
+});
 
 (() => {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1437,7 +1442,7 @@ if (IS_STANDALONE) {
 $('#certLink').addEventListener('click', e => {
   const v = ($('#ipField').value.trim() || currentIp).replace(/^\w+:\/\//,'').replace(/[:/].*$/,'');
   if (!/^[\w.-]+$/.test(v)) { e.preventDefault(); setupMsg('bad', 'Enter the TV’s IP address first, like 192.168.1.50.'); return; }
-  upsertTv(v); currentIp = v; saveTvs(); store.set('certStepAt', String(Date.now()));
+  upsertTv(v); currentIp = v; saveTvs();
   e.currentTarget.href = `https://${v}:3001/`;
 });
 $('#copyLog').addEventListener('click', async () => {
@@ -1462,10 +1467,18 @@ applyHaptics();
 if (!('vibrate' in navigator)) $('#hapticSeg').closest('.setting').style.display = 'none';
 
 /* reconnect when the app comes back to the foreground */
-document.addEventListener('visibilitychange', () => {
+function resume(){
   const t = cur();
-  if (document.visibilityState === 'visible' && t && t.key && !paired && !ws) connect();
-});
+  if (!t || !t.key) return;
+  if (!paired) { if (!ws) connect(); return; }
+  // iOS can freeze the socket in the background and hand back a dead one that still looks
+  // open. Ask the TV something small; if it doesn't answer quickly, reconnect.
+  const sock = ws;
+  Promise.race([request('ssap://audio/getVolume'), new Promise((_, rej) => setTimeout(() => rej(new Error('stale')), 2500))])
+    .catch(() => { if (ws === sock) { log('No answer after returning to the app; reconnecting'); connect(); } });
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resume(); });
+window.addEventListener('pageshow', e => { if (e.persisted) resume(); });
 
 /* ---------- start: show cached apps instantly, then connect ---------- */
 const savedTab = store.get('tab'); if (savedTab && $('#v-' + savedTab)) showTab(savedTab);
